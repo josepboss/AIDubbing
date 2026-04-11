@@ -5,7 +5,7 @@ SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "settings.json")
 
 DEFAULT_SETTINGS = {
     "openrouter_api_key": "",
-    "openrouter_model": "google/gemini-2.0-flash-lite",
+    "openrouter_model": "google/gemini-2.0-flash-lite-001",
     "tts_provider": "azure",
     "azure_tts_key": "",
     "azure_tts_region": "eastus",
