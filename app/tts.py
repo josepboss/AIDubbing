@@ -1,7 +1,30 @@
+import time
 import requests
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Azure token cache — tokens are valid for 10 minutes; refresh after 9 min
+_azure_token_cache: dict = {}   # key: "{api_key}:{region}" → {"token": str, "expires_at": float}
+
+
+def _get_azure_token(api_key: str, region: str) -> str:
+    """Return a cached Azure cognitive-services bearer token, refreshing when < 60 s remain."""
+    cache_key = f"{api_key}:{region}"
+    entry = _azure_token_cache.get(cache_key)
+    if entry and time.time() < entry["expires_at"]:
+        return entry["token"]
+
+    logger.info("Refreshing Azure TTS token...")
+    resp = requests.post(
+        f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken",
+        headers={"Ocp-Apim-Subscription-Key": api_key},
+        timeout=10
+    )
+    resp.raise_for_status()
+    token = resp.text
+    _azure_token_cache[cache_key] = {"token": token, "expires_at": time.time() + 9 * 60}
+    return token
 
 
 def generate_segment_audio(text: str, gender: str, settings: dict,
@@ -38,11 +61,7 @@ def generate_segment_audio(text: str, gender: str, settings: dict,
 
 
 def _azure_tts(text, api_key, region, voice_name):
-    token = requests.post(
-        f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken",
-        headers={"Ocp-Apim-Subscription-Key": api_key},
-        timeout=10
-    ).text
+    token = _get_azure_token(api_key, region)
 
     ssml = f"""<speak version='1.0' xml:lang='ar-EG'>
         <voice name='{voice_name}'>{text}</voice>
@@ -58,6 +77,23 @@ def _azure_tts(text, api_key, region, voice_name):
         data=ssml.encode("utf-8"),
         timeout=30
     )
+
+    # If the token was rejected (expired mid-job), force-refresh and retry once
+    if response.status_code == 401:
+        cache_key = f"{api_key}:{region}"
+        _azure_token_cache.pop(cache_key, None)
+        token = _get_azure_token(api_key, region)
+        response = requests.post(
+            f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-48khz-192kbitrate-mono-mp3"
+            },
+            data=ssml.encode("utf-8"),
+            timeout=30
+        )
+
     response.raise_for_status()
     return response.content
 
