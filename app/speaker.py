@@ -95,87 +95,85 @@ def _detect_gender_pyannote(video_path, speakers, diarization):
 
 def _fallback_with_pitch(video_path: str, segments: list) -> tuple:
     """
-    No pyannote available. Try pitch analysis per speaker using ffmpeg + librosa.
-    Falls back to alternating male/female only if pitch analysis also fails.
+    No pyannote available. Analyse pitch per segment individually so that
+    even when Whisper labels every segment 'SPEAKER_00' each one gets the
+    correct gender based on its own audio content.
+    Falls back to alternating male/female only if pitch analysis fails entirely.
     Returns (segments, method_name).
     """
-    speakers = list(dict.fromkeys(s["speaker"] for s in segments))
-    gender_map = _pitch_gender_for_speakers(video_path, segments, speakers)
+    success = _pitch_gender_per_segment(video_path, segments)
 
-    if gender_map:
+    if success:
         method = "pitch_analysis"
-        logger.info("Speaker gender: pitch analysis (F0 estimation)")
+        logger.info("Speaker gender: per-segment pitch analysis (F0 estimation)")
     else:
         method = "alternating"
         logger.info("Speaker gender: alternating fallback")
+        # Alternate gender across unique speakers as a last resort
+        speakers = list(dict.fromkeys(s["speaker"] for s in segments))
         gender_map = {spk: ("male" if i % 2 == 0 else "female")
                       for i, spk in enumerate(speakers)}
-
-    for seg in segments:
-        seg["gender"] = gender_map.get(seg["speaker"], "male")
+        for seg in segments:
+            seg["gender"] = gender_map.get(seg["speaker"], "male")
 
     return segments, method
 
 
-def _pitch_gender_for_speakers(video_path: str, segments: list, speakers: list):
+def _pitch_gender_per_segment(video_path: str, segments: list) -> bool:
     """
-    Sample up to 3 segments per speaker, extract audio, and estimate
-    fundamental frequency (F0) to determine gender.
+    Extract audio for EACH segment individually and estimate F0.
+    Sets seg['gender'] directly on each segment.
     Female voices typically have F0 > 165 Hz, male < 165 Hz.
-    Returns a gender_map dict or None if analysis failed entirely.
+    Returns True if at least one segment was successfully analysed.
     """
     try:
         import librosa
         import numpy as np
 
-        gender_map = {}
+        any_success = False
 
-        for speaker in speakers:
-            speaker_segs = [s for s in segments if s["speaker"] == speaker][:3]
-            all_f0 = []
+        for seg in segments:
+            duration = min(seg["end"] - seg["start"], 5.0)
+            if duration < 0.3:
+                seg.setdefault("gender", "male")
+                continue
 
-            for seg in speaker_segs:
-                duration = min(seg["end"] - seg["start"], 5.0)
-                if duration < 0.3:
+            tmp_wav = tempfile.mktemp(suffix=".wav")
+            try:
+                ret = subprocess.run([
+                    "ffmpeg", "-y", "-i", video_path,
+                    "-ss", str(seg["start"]), "-t", str(duration),
+                    "-ac", "1", "-ar", "16000", tmp_wav
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                if ret.returncode != 0 or not os.path.exists(tmp_wav):
+                    seg.setdefault("gender", "male")
                     continue
 
-                tmp_wav = tempfile.mktemp(suffix=".wav")
-                try:
-                    ret = subprocess.run([
-                        "ffmpeg", "-y", "-i", video_path,
-                        "-ss", str(seg["start"]), "-t", str(duration),
-                        "-ac", "1", "-ar", "16000", tmp_wav
-                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                y, sr = librosa.load(tmp_wav, sr=16000)
+                f0, voiced, _ = librosa.pyin(y, fmin=50, fmax=500, sr=sr)
 
-                    if ret.returncode != 0 or not os.path.exists(tmp_wav):
+                if f0 is not None and voiced is not None:
+                    valid = f0[voiced]
+                    valid = valid[~np.isnan(valid)]
+                    if len(valid) > 0:
+                        mean_f0 = float(np.mean(valid))
+                        seg["gender"] = "female" if mean_f0 > 165 else "male"
+                        logger.info(
+                            f"Seg [{seg['start']:.1f}-{seg['end']:.1f}s]: "
+                            f"F0={mean_f0:.0f}Hz → {seg['gender']}"
+                        )
+                        any_success = True
                         continue
 
-                    y, sr = librosa.load(tmp_wav, sr=16000)
-                    f0, voiced, _ = librosa.pyin(y, fmin=50, fmax=500, sr=sr)
-                    if f0 is not None and voiced is not None:
-                        valid = f0[voiced]
-                        valid = valid[~np.isnan(valid)]
-                        all_f0.extend(valid.tolist())
-                finally:
-                    if os.path.exists(tmp_wav):
-                        os.remove(tmp_wav)
+                seg.setdefault("gender", "male")
 
-            if all_f0:
-                mean_f0 = float(np.mean(all_f0))
-                gender = "female" if mean_f0 > 165 else "male"
-                gender_map[speaker] = gender
-                logger.info(f"Pitch fallback: {speaker} F0={mean_f0:.0f}Hz → {gender}")
-            else:
-                # No pitch data for this speaker — mark unknown, fill below
-                gender_map[speaker] = None
+            finally:
+                if os.path.exists(tmp_wav):
+                    os.remove(tmp_wav)
 
-        # Fill any unknowns by alternating within the unknowns
-        unknowns = [s for s, g in gender_map.items() if g is None]
-        for i, spk in enumerate(unknowns):
-            gender_map[spk] = "male" if i % 2 == 0 else "female"
-
-        return gender_map
+        return any_success
 
     except Exception as e:
-        logger.warning(f"Pitch gender analysis failed: {e}")
-        return None
+        logger.warning(f"Per-segment pitch analysis failed: {e}")
+        return False
