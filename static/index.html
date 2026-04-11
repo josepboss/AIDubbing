@@ -462,6 +462,30 @@
       <div class="step" id="step-merge_video">
         <div class="step-icon">8</div> Merge with Video (FFmpeg)
       </div>
+      <div class="step" id="step-metadata">
+        <div class="step-icon">9</div> Title Translation &amp; Thumbnail
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPLETION INFO CARD (shown after job finishes) -->
+  <div class="card" id="completionCard" style="display:none">
+    <h3>✅ Dubbing Complete</h3>
+
+    <div style="margin-bottom:16px;">
+      <div style="font-size:12px;color:#9090b0;margin-bottom:6px;">Translated Title</div>
+      <div id="translatedTitle" style="font-size:18px;font-weight:700;color:#c4c4e0;direction:rtl;text-align:right;line-height:1.4;"></div>
+      <button class="btn btn-secondary" style="margin-top:8px;padding:5px 14px;font-size:12px;" onclick="copyTitle()">📋 Copy Title</button>
+    </div>
+
+    <div>
+      <div style="font-size:12px;color:#9090b0;margin-bottom:8px;">Thumbnail Preview</div>
+      <img id="thumbnailPreview" style="width:100%;border-radius:8px;display:none;margin-bottom:10px;" alt="Thumbnail" />
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-success" onclick="downloadResult()">⬇️ Download Video</button>
+        <button class="btn btn-secondary" onclick="downloadSRT()">📄 Download SRT</button>
+        <button id="downloadThumbBtn" class="btn btn-secondary" style="display:none;" onclick="downloadThumbnail()">🖼️ Download Thumbnail</button>
+      </div>
     </div>
   </div>
 
@@ -604,6 +628,17 @@
     </div>
   </div>
 
+  <div class="card">
+    <h3>Output</h3>
+    <div class="form-group">
+      <label>Thumbnail Style</label>
+      <select id="s-thumbnail_style">
+        <option value="title_overlay">Title Overlay (Default)</option>
+        <option value="frame_only">Frame Only (No Text)</option>
+      </select>
+    </div>
+  </div>
+
   <div class="action-row">
     <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
   </div>
@@ -691,7 +726,7 @@
 
   const STEP_ORDER = [
     "upload", "extract_audio", "transcribe", "detect_speakers",
-    "translate", "generate_tts", "assemble_audio", "merge_video"
+    "translate", "generate_tts", "assemble_audio", "merge_video", "metadata"
   ];
 
   function switchTab(tab) {
@@ -851,6 +886,7 @@
       document.getElementById('s-target_language').value = s.target_language || 'Arabic';
       document.getElementById('s-whisper_model').value = s.whisper_model || 'base';
       document.getElementById('s-hf_token').value = s.hf_token || '';
+      document.getElementById('s-thumbnail_style').value = s.thumbnail_style || 'title_overlay';
       updateTTSVisibility();
     } catch (e) {
       console.error('Failed to load settings', e);
@@ -874,6 +910,7 @@
       target_language: document.getElementById('s-target_language').value,
       whisper_model: document.getElementById('s-whisper_model').value,
       hf_token: document.getElementById('s-hf_token').value,
+      thumbnail_style: document.getElementById('s-thumbnail_style').value,
     };
     try {
       await fetch('/api/settings', {
@@ -1024,10 +1061,10 @@
         const el = document.getElementById('step-' + s);
         if (el) el.classList.add('done');
       });
-      updateProgress(8);
-      document.getElementById('downloadBtn').classList.remove('hidden');
-      document.getElementById('downloadSrtBtn').classList.remove('hidden');
-      showAlert('Dubbing complete! Your video is ready to download.', 'success');
+      updateProgress(9);
+      document.getElementById('downloadBtn').classList.add('hidden');
+      document.getElementById('downloadSrtBtn').classList.add('hidden');
+      showCompletionInfo(job);
     }
 
     if (job.status === 'error') {
@@ -1091,7 +1128,7 @@
   }
 
   function updateProgress(stepIdx) {
-    const pct = Math.round((stepIdx / 8) * 100);
+    const pct = Math.round((stepIdx / 9) * 100);
     document.getElementById('progressBar').style.width = pct + '%';
   }
 
@@ -1110,6 +1147,41 @@
   function downloadSRT() {
     if (!currentJobId) return;
     window.open(`/api/download-srt/${currentJobId}`, '_blank');
+  }
+
+  function downloadThumbnail() {
+    if (!currentJobId) return;
+    window.open(`/api/thumbnail/${currentJobId}`, '_blank');
+  }
+
+  function copyTitle() {
+    const title = document.getElementById('translatedTitle').textContent;
+    if (!title) return;
+    navigator.clipboard.writeText(title).then(() => {
+      showAlert('Title copied to clipboard!', 'success');
+    }).catch(() => {
+      prompt('Copy this title:', title);
+    });
+  }
+
+  function showCompletionInfo(job) {
+    const card = document.getElementById('completionCard');
+    card.style.display = 'block';
+
+    if (job.translated_title) {
+      document.getElementById('translatedTitle').textContent = job.translated_title;
+    }
+
+    if (job.thumbnail_path || job.job_id) {
+      const img = document.getElementById('thumbnailPreview');
+      const thumbBtn = document.getElementById('downloadThumbBtn');
+      img.src = `/api/thumbnail/${job.job_id}?t=${Date.now()}`;
+      img.style.display = 'block';
+      img.onerror = () => { img.style.display = 'none'; thumbBtn.style.display = 'none'; };
+      img.onload = () => { thumbBtn.style.display = 'inline-flex'; };
+    }
+
+    showAlert('Dubbing complete! Your video is ready.', 'success');
   }
 
   loadSettings();
@@ -1179,6 +1251,10 @@
     document.getElementById('downloadBtn').classList.add('hidden');
     document.getElementById('downloadSrtBtn').classList.add('hidden');
     document.getElementById('retryBtn').classList.add('hidden');
+    document.getElementById('completionCard').style.display = 'none';
+    document.getElementById('thumbnailPreview').style.display = 'none';
+    document.getElementById('downloadThumbBtn').style.display = 'none';
+    document.getElementById('progressCard').style.display = 'block';
     document.getElementById('statusMsg').textContent = 'Loading job status…';
     pollStatus();
   }
