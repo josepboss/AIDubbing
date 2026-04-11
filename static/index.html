@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIDubbing — Arabic Video Dubbing</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f0f13;
+      color: #e2e2ea;
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border-bottom: 1px solid #2a2a4a;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #6c63ff, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-sub {
+      font-size: 13px;
+      color: #7b7b9a;
+      font-weight: 400;
+      margin-top: 2px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      padding: 20px 32px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+
+    .tab {
+      padding: 10px 24px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #7b7b9a;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+      user-select: none;
+    }
+
+    .tab:hover { color: #a78bfa; }
+
+    .tab.active {
+      color: #a78bfa;
+      border-bottom-color: #a78bfa;
+    }
+
+    .panel {
+      display: none;
+      padding: 32px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .panel.active { display: block; }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #c4c4e0;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #2a2a4a;
+    }
+
+    .form-group {
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: #9090b0;
+      margin-bottom: 5px;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+      width: 100%;
+      padding: 9px 12px;
+      background: #0f0f1a;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      color: #e2e2ea;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #6c63ff;
+    }
+
+    select option { background: #1a1a2e; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6c63ff, #a78bfa);
+      color: white;
+    }
+
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-secondary {
+      background: #2a2a4a;
+      color: #c4c4e0;
+    }
+
+    .btn-secondary:hover { background: #353560; }
+    .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-success {
+      background: linear-gradient(135deg, #10b981, #34d399);
+      color: white;
+    }
+
+    .btn-success:hover { opacity: 0.9; }
+
+    .upload-area {
+      border: 2px dashed #2a2a4a;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .upload-area:hover, .upload-area.drag-over {
+      border-color: #6c63ff;
+      background: rgba(108, 99, 255, 0.05);
+    }
+
+    .upload-area input { display: none; }
+
+    .upload-icon { font-size: 48px; margin-bottom: 12px; }
+
+    .upload-area p {
+      color: #7b7b9a;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+
+    .upload-area .file-name {
+      color: #a78bfa;
+      font-weight: 600;
+      font-size: 15px;
+      margin-top: 4px;
+    }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: 20px 0;
+    }
+
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #0f0f1a;
+      border: 1px solid #2a2a4a;
+      font-size: 13px;
+      color: #7b7b9a;
+      transition: all 0.3s;
+    }
+
+    .step.active {
+      border-color: #6c63ff;
+      color: #c4c4e0;
+      background: rgba(108, 99, 255, 0.08);
+    }
+
+    .step.done {
+      border-color: #10b981;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.07);
+    }
+
+    .step.error {
+      border-color: #ef4444;
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.07);
+    }
+
+    .step-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      background: #2a2a4a;
+      color: #7b7b9a;
+    }
+
+    .step.active .step-icon {
+      background: #6c63ff;
+      color: white;
+      animation: pulse 1.4s infinite;
+    }
+
+    .step.done .step-icon { background: #10b981; color: white; }
+    .step.error .step-icon { background: #ef4444; color: white; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .progress-bar-wrap {
+      background: #0f0f1a;
+      border-radius: 8px;
+      height: 8px;
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #6c63ff, #a78bfa);
+      border-radius: 8px;
+      transition: width 0.6s ease;
+    }
+
+    .status-msg {
+      font-size: 13px;
+      color: #9090b0;
+      margin: 8px 0;
+      min-height: 18px;
+    }
+
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+
+    .alert-success {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid #10b981;
+      color: #6ee7b7;
+    }
+
+    .alert-error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+    }
+
+    .row { display: flex; gap: 12px; }
+    .row .form-group { flex: 1; }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #6c63ff;
+      margin-bottom: 12px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(108, 99, 255, 0.2);
+      color: #a78bfa;
+    }
+
+    .action-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">🎬 AIDubbing</div>
+    <div class="logo-sub">AI-Powered Arabic Video Dubbing</div>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('dubbing')">🎙️ Dubbing</div>
+  <div class="tab" onclick="switchTab('settings')">⚙️ Settings</div>
+</div>
+
+<!-- DUBBING PANEL -->
+<div id="panel-dubbing" class="panel active">
+
+  <div class="card">
+    <h3>Upload Video</h3>
+    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" accept=".mp4,.mkv,.avi,.mov,.webm" onchange="handleFileSelect(this)" />
+      <div class="upload-icon">📹</div>
+      <strong style="color:#c4c4e0">Drop video here or click to browse</strong>
+      <p>Supports MP4, MKV, AVI, MOV, WebM</p>
+      <div class="file-name" id="selectedFileName"></div>
+    </div>
+    <div style="margin-top:16px;" class="action-row">
+      <button class="btn btn-primary" id="uploadBtn" onclick="uploadVideo()" disabled>
+        📤 Upload
+      </button>
+      <button class="btn btn-primary" id="processBtn" onclick="startProcessing()" disabled>
+        🚀 Start Dubbing
+      </button>
+      <button class="btn btn-success hidden" id="downloadBtn" onclick="downloadResult()">
+        ⬇️ Download Dubbed Video
+      </button>
+    </div>
+  </div>
+
+  <div class="card" id="progressCard" style="display:none">
+    <h3>Dubbing Progress</h3>
+    <div id="alertBox" class="hidden"></div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progressBar" style="width:0%"></div>
+    </div>
+    <div class="status-msg" id="statusMsg">Initializing...</div>
+
+    <div class="steps">
+      <div class="step" id="step-upload">
+        <div class="step-icon">1</div> Upload Video
+      </div>
+      <div class="step" id="step-extract_audio">
+        <div class="step-icon">2</div> Extract Audio (FFmpeg)
+      </div>
+      <div class="step" id="step-transcribe">
+        <div class="step-icon">3</div> Transcribe Speech (Whisper)
+      </div>
+      <div class="step" id="step-detect_speakers">
+        <div class="step-icon">4</div> Detect Speakers & Gender
+      </div>
+      <div class="step" id="step-translate">
+        <div class="step-icon">5</div> Translate to Arabic (OpenRouter)
+      </div>
+      <div class="step" id="step-generate_tts">
+        <div class="step-icon">6</div> Generate AI Voices (TTS)
+      </div>
+      <div class="step" id="step-assemble_audio">
+        <div class="step-icon">7</div> Assemble Dubbed Audio
+      </div>
+      <div class="step" id="step-merge_video">
+        <div class="step-icon">8</div> Merge with Video (FFmpeg)
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="panel-settings" class="panel">
+
+  <div id="settingsAlert" class="hidden"></div>
+
+  <div class="card">
+    <h3>Translation (OpenRouter)</h3>
+    <div class="form-group">
+      <label>OpenRouter API Key</label>
+      <input type="password" id="s-openrouter_api_key" placeholder="sk-or-..." />
+    </div>
+    <div class="form-group">
+      <label>Model</label>
+      <select id="s-openrouter_model">
+        <option value="google/gemini-2.0-flash-lite">Gemini 2.0 Flash Lite (Fast, Free)</option>
+        <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
+        <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+        <option value="openai/gpt-4o">GPT-4o</option>
+        <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
+        <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="form-group">
+        <label>Target Language</label>
+        <select id="s-target_language">
+          <option value="Arabic">Arabic</option>
+          <option value="French">French</option>
+          <option value="Spanish">Spanish</option>
+          <option value="German">German</option>
+          <option value="Japanese">Japanese</option>
+          <option value="Chinese">Chinese</option>
+          <option value="Portuguese">Portuguese</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Whisper Model Size</label>
+        <select id="s-whisper_model">
+          <option value="tiny">Tiny (Fastest)</option>
+          <option value="base">Base (Recommended)</option>
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large (Most Accurate)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Text-to-Speech Provider</h3>
+    <div class="form-group">
+      <label>TTS Provider</label>
+      <select id="s-tts_provider" onchange="updateTTSVisibility()">
+        <option value="azure">Azure Cognitive Services (Arabic optimized)</option>
+        <option value="openai">OpenAI TTS</option>
+        <option value="elevenlabs">ElevenLabs</option>
+      </select>
+    </div>
+
+    <div id="azure-section">
+      <div class="section-title">Azure Settings</div>
+      <div class="row">
+        <div class="form-group">
+          <label>Azure TTS API Key</label>
+          <input type="password" id="s-azure_tts_key" placeholder="Your Azure key" />
+        </div>
+        <div class="form-group">
+          <label>Region</label>
+          <input type="text" id="s-azure_tts_region" placeholder="eastus" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="form-group">
+          <label>Male Voice <span class="badge">Arabic</span></label>
+          <select id="s-male_voice">
+            <option value="ar-EG-ShakirNeural">ar-EG-ShakirNeural (Egyptian Male)</option>
+            <option value="ar-SA-HamedNeural">ar-SA-HamedNeural (Saudi Male)</option>
+            <option value="ar-IQ-BasselNeural">ar-IQ-BasselNeural (Iraqi Male)</option>
+            <option value="ar-MA-JamalNeural">ar-MA-JamalNeural (Moroccan Male)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Female Voice <span class="badge">Arabic</span></label>
+          <select id="s-female_voice">
+            <option value="ar-EG-SalmaNeural">ar-EG-SalmaNeural (Egyptian Female)</option>
+            <option value="ar-SA-ZariyahNeural">ar-SA-ZariyahNeural (Saudi Female)</option>
+            <option value="ar-IQ-RanaNeural">ar-IQ-RanaNeural (Iraqi Female)</option>
+            <option value="ar-MA-MounaNeural">ar-MA-MounaNeural (Moroccan Female)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="openai-section" style="display:none">
+      <div class="section-title">OpenAI Settings</div>
+      <div class="form-group">
+        <label>OpenAI API Key</label>
+        <input type="password" id="s-openai_api_key" placeholder="sk-..." />
+      </div>
+    </div>
+
+    <div id="elevenlabs-section" style="display:none">
+      <div class="section-title">ElevenLabs Settings</div>
+      <div class="form-group">
+        <label>ElevenLabs API Key</label>
+        <input type="password" id="s-elevenlabs_api_key" placeholder="Your ElevenLabs key" />
+      </div>
+      <div class="row">
+        <div class="form-group">
+          <label>Male Voice ID</label>
+          <input type="text" id="s-elevenlabs_male_voice_id" placeholder="voice_id_here" />
+        </div>
+        <div class="form-group">
+          <label>Female Voice ID</label>
+          <input type="text" id="s-elevenlabs_female_voice_id" placeholder="voice_id_here" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
+  </div>
+</div>
+
+<script>
+  let currentJobId = null;
+  let pollInterval = null;
+  let selectedFile = null;
+
+  const STEP_ORDER = [
+    "upload", "extract_audio", "transcribe", "detect_speakers",
+    "translate", "generate_tts", "assemble_audio", "merge_video"
+  ];
+
+  function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    const tabs = document.querySelectorAll('.tab');
+    const panels = document.querySelectorAll('.panel');
+    if (tab === 'dubbing') { tabs[0].classList.add('active'); panels[0].classList.add('active'); }
+    else { tabs[1].classList.add('active'); panels[1].classList.add('active'); }
+  }
+
+  function updateTTSVisibility() {
+    const provider = document.getElementById('s-tts_provider').value;
+    document.getElementById('azure-section').style.display = provider === 'azure' ? 'block' : 'none';
+    document.getElementById('openai-section').style.display = provider === 'openai' ? 'block' : 'none';
+    document.getElementById('elevenlabs-section').style.display = provider === 'elevenlabs' ? 'block' : 'none';
+  }
+
+  async function loadSettings() {
+    try {
+      const res = await fetch('/api/settings');
+      const s = await res.json();
+      document.getElementById('s-openrouter_api_key').value = s.openrouter_api_key || '';
+      document.getElementById('s-openrouter_model').value = s.openrouter_model || 'google/gemini-2.0-flash-lite';
+      document.getElementById('s-tts_provider').value = s.tts_provider || 'azure';
+      document.getElementById('s-azure_tts_key').value = s.azure_tts_key || '';
+      document.getElementById('s-azure_tts_region').value = s.azure_tts_region || 'eastus';
+      document.getElementById('s-male_voice').value = s.male_voice || 'ar-EG-ShakirNeural';
+      document.getElementById('s-female_voice').value = s.female_voice || 'ar-EG-SalmaNeural';
+      document.getElementById('s-openai_api_key').value = s.openai_api_key || '';
+      document.getElementById('s-elevenlabs_api_key').value = s.elevenlabs_api_key || '';
+      document.getElementById('s-elevenlabs_male_voice_id').value = s.elevenlabs_male_voice_id || '';
+      document.getElementById('s-elevenlabs_female_voice_id').value = s.elevenlabs_female_voice_id || '';
+      document.getElementById('s-target_language').value = s.target_language || 'Arabic';
+      document.getElementById('s-whisper_model').value = s.whisper_model || 'base';
+      updateTTSVisibility();
+    } catch (e) {
+      console.error('Failed to load settings', e);
+    }
+  }
+
+  async function saveSettings() {
+    const settings = {
+      openrouter_api_key: document.getElementById('s-openrouter_api_key').value,
+      openrouter_model: document.getElementById('s-openrouter_model').value,
+      tts_provider: document.getElementById('s-tts_provider').value,
+      azure_tts_key: document.getElementById('s-azure_tts_key').value,
+      azure_tts_region: document.getElementById('s-azure_tts_region').value,
+      male_voice: document.getElementById('s-male_voice').value,
+      female_voice: document.getElementById('s-female_voice').value,
+      openai_api_key: document.getElementById('s-openai_api_key').value,
+      elevenlabs_api_key: document.getElementById('s-elevenlabs_api_key').value,
+      elevenlabs_male_voice_id: document.getElementById('s-elevenlabs_male_voice_id').value,
+      elevenlabs_female_voice_id: document.getElementById('s-elevenlabs_female_voice_id').value,
+      target_language: document.getElementById('s-target_language').value,
+      whisper_model: document.getElementById('s-whisper_model').value,
+    };
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      showSettingsAlert('Settings saved successfully!', 'success');
+    } catch (e) {
+      showSettingsAlert('Failed to save settings: ' + e.message, 'error');
+    }
+  }
+
+  function showSettingsAlert(msg, type) {
+    const el = document.getElementById('settingsAlert');
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 4000);
+  }
+
+  function handleFileSelect(input) {
+    if (input.files.length > 0) {
+      selectedFile = input.files[0];
+      document.getElementById('selectedFileName').textContent = selectedFile.name;
+      document.getElementById('uploadBtn').disabled = false;
+    }
+  }
+
+  const uploadArea = document.getElementById('uploadArea');
+  uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+  uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+  uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.classList.remove('drag-over');
+    if (e.dataTransfer.files.length > 0) {
+      selectedFile = e.dataTransfer.files[0];
+      document.getElementById('selectedFileName').textContent = selectedFile.name;
+      document.getElementById('uploadBtn').disabled = false;
+    }
+  });
+
+  async function uploadVideo() {
+    if (!selectedFile) return;
+    document.getElementById('uploadBtn').disabled = true;
+    document.getElementById('progressCard').style.display = 'block';
+    setAllStepsPending();
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Upload failed');
+      }
+      const data = await res.json();
+      currentJobId = data.job_id;
+      markStepDone('upload');
+      document.getElementById('processBtn').disabled = false;
+      document.getElementById('statusMsg').textContent = 'Video uploaded! Click "Start Dubbing" to begin.';
+      updateProgress(1);
+    } catch (e) {
+      showAlert('Upload failed: ' + e.message, 'error');
+      document.getElementById('uploadBtn').disabled = false;
+    }
+  }
+
+  async function startProcessing() {
+    if (!currentJobId) return;
+    document.getElementById('processBtn').disabled = true;
+
+    try {
+      const res = await fetch(`/api/process/${currentJobId}`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to start');
+      }
+      pollStatus();
+    } catch (e) {
+      showAlert('Error: ' + e.message, 'error');
+      document.getElementById('processBtn').disabled = false;
+    }
+  }
+
+  function pollStatus() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(async () => {
+      if (!currentJobId) return;
+      try {
+        const res = await fetch(`/api/status/${currentJobId}`);
+        const job = await res.json();
+        updateUI(job);
+        if (job.status === 'completed' || job.status === 'error') {
+          clearInterval(pollInterval);
+        }
+      } catch (e) {
+        console.error('Poll error:', e);
+      }
+    }, 1500);
+  }
+
+  function updateUI(job) {
+    document.getElementById('statusMsg').textContent = job.message || '';
+    const stepIdx = job.step_index || 0;
+    updateProgress(stepIdx);
+
+    STEP_ORDER.forEach((s, i) => {
+      const el = document.getElementById('step-' + s);
+      if (!el) return;
+      el.className = 'step';
+      if (i < stepIdx) el.classList.add('done');
+      else if (job.current_step === s) el.classList.add('active');
+    });
+
+    if (job.status === 'completed') {
+      STEP_ORDER.forEach(s => {
+        const el = document.getElementById('step-' + s);
+        if (el) el.classList.add('done');
+      });
+      updateProgress(8);
+      document.getElementById('downloadBtn').classList.remove('hidden');
+      showAlert('Dubbing complete! Your Arabic video is ready to download.', 'success');
+    }
+
+    if (job.status === 'error') {
+      showAlert('Error: ' + job.message, 'error');
+      const currentEl = document.getElementById('step-' + job.current_step);
+      if (currentEl) {
+        currentEl.className = 'step error';
+      }
+    }
+  }
+
+  function setAllStepsPending() {
+    STEP_ORDER.forEach(s => {
+      const el = document.getElementById('step-' + s);
+      if (el) el.className = 'step';
+    });
+    updateProgress(0);
+    document.getElementById('alertBox').classList.add('hidden');
+    document.getElementById('downloadBtn').classList.add('hidden');
+  }
+
+  function markStepDone(step) {
+    const el = document.getElementById('step-' + step);
+    if (el) el.className = 'step done';
+  }
+
+  function updateProgress(stepIdx) {
+    const pct = Math.round((stepIdx / 8) * 100);
+    document.getElementById('progressBar').style.width = pct + '%';
+  }
+
+  function showAlert(msg, type) {
+    const el = document.getElementById('alertBox');
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+
+  function downloadResult() {
+    if (!currentJobId) return;
+    window.open(`/api/download/${currentJobId}`, '_blank');
+  }
+
+  loadSettings();
+</script>
+</body>
+</html>
