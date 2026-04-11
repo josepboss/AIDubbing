@@ -120,7 +120,7 @@ def run_pipeline(job_id: str):
         segments = translate_segments(
             segments,
             settings["openrouter_api_key"],
-            settings.get("openrouter_model", "google/gemini-2.0-flash-lite"),
+            settings.get("openrouter_model", "google/gemini-2.0-flash-lite-001"),
             settings.get("target_language", "Arabic")
         )
 
