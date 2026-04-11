@@ -418,6 +418,9 @@
       <button class="btn btn-success hidden" id="downloadBtn" onclick="downloadResult()">
         ⬇️ Download Dubbed Video
       </button>
+      <button class="btn btn-secondary hidden" id="downloadSrtBtn" onclick="downloadSRT()">
+        📄 Download SRT
+      </button>
       <button class="btn btn-warning hidden" id="retryBtn" onclick="resumeJob()">
         ↩ Retry from here
       </button>
@@ -1011,7 +1014,8 @@
       });
       updateProgress(8);
       document.getElementById('downloadBtn').classList.remove('hidden');
-      showAlert('Dubbing complete! Your Arabic video is ready to download.', 'success');
+      document.getElementById('downloadSrtBtn').classList.remove('hidden');
+      showAlert('Dubbing complete! Your video is ready to download.', 'success');
     }
 
     if (job.status === 'error') {
@@ -1089,6 +1093,11 @@
   function downloadResult() {
     if (!currentJobId) return;
     window.open(`/api/download/${currentJobId}`, '_blank');
+  }
+
+  function downloadSRT() {
+    if (!currentJobId) return;
+    window.open(`/api/download-srt/${currentJobId}`, '_blank');
   }
 
   loadSettings();
