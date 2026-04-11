@@ -181,7 +181,7 @@ def run_pipeline(job_id: str, resume_from: str = None):
             segments = translate_segments(
                 segments,
                 settings["openrouter_api_key"],
-                settings.get("openrouter_model", "google/gemini-2.0-flash-lite-001"),
+                settings.get("translation_model", "qwen/qwen-2.5-72b-instruct"),
                 settings.get("target_language", "Arabic")
             )
             _save_ckpt(job_id, "translated", segments)
