@@ -19,7 +19,7 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> list
 
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
+            token=hf_token
         )
 
         diarization = pipeline(video_path)
