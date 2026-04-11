@@ -158,6 +158,13 @@
 
     .btn-success:hover { opacity: 0.9; }
 
+    .btn-warning {
+      background: linear-gradient(135deg, #f59e0b, #fbbf24);
+      color: #1a1a2e;
+      font-weight: 700;
+    }
+    .btn-warning:hover { opacity: 0.9; }
+
     .upload-area {
       border: 2px dashed #2a2a4a;
       border-radius: 12px;
@@ -364,6 +371,9 @@
       </button>
       <button class="btn btn-success hidden" id="downloadBtn" onclick="downloadResult()">
         ⬇️ Download Dubbed Video
+      </button>
+      <button class="btn btn-warning hidden" id="retryBtn" onclick="resumeJob()">
+        ↩ Retry from here
       </button>
     </div>
   </div>
@@ -917,9 +927,45 @@
     if (job.status === 'error') {
       showAlert('Error: ' + job.message, 'error');
       const currentEl = document.getElementById('step-' + job.current_step);
-      if (currentEl) {
-        currentEl.className = 'step error';
+      if (currentEl) currentEl.className = 'step error';
+
+      // Show the retry button for this specific step
+      const stepLabels = {
+        extract_audio: 'Extract Audio',
+        transcribe: 'Transcription',
+        detect_speakers: 'Speaker Detection',
+        translate: 'Translation',
+        generate_tts: 'TTS Generation',
+        assemble_audio: 'Audio Assembly',
+        merge_video: 'Video Merge'
+      };
+      const label = stepLabels[job.current_step] || job.current_step;
+      const retryBtn = document.getElementById('retryBtn');
+      retryBtn.textContent = `↩ Retry from "${label}"`;
+      retryBtn.classList.remove('hidden');
+      document.getElementById('processBtn').disabled = false;
+    } else {
+      document.getElementById('retryBtn').classList.add('hidden');
+    }
+  }
+
+  async function resumeJob() {
+    if (!currentJobId) return;
+    document.getElementById('retryBtn').disabled = true;
+    document.getElementById('processBtn').disabled = true;
+    try {
+      const res = await fetch(`/api/resume/${currentJobId}`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to resume');
       }
+      const data = await res.json();
+      showAlert(`Resuming from "${data.from_step}"…`, 'info');
+      document.getElementById('retryBtn').classList.add('hidden');
+      pollStatus();
+    } catch (e) {
+      showAlert('Error: ' + e.message, 'error');
+      document.getElementById('retryBtn').disabled = false;
     }
   }
 
