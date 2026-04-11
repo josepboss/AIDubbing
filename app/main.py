@@ -155,8 +155,12 @@ def run_pipeline(job_id: str, resume_from: str = None):
             update_job(job_id, current_step="detect_speakers", step_index=3,
                        message="Detecting speakers and gender...")
             from app.speaker import detect_speakers
-            segments = detect_speakers(video_path, segments, hf_token=settings.get("hf_token", ""))
+            segments, speaker_method = detect_speakers(
+                video_path, segments, hf_token=settings.get("hf_token", "")
+            )
             _save_ckpt(job_id, "speakers", segments)
+            update_job(job_id, speaker_method=speaker_method,
+                       message=f"Speakers detected via {speaker_method}")
 
         # ── Step 4: Translate ──────────────────────────────────────────────────
         if resume_idx <= 3:
