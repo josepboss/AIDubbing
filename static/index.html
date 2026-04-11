@@ -420,7 +420,7 @@
     <div class="form-group">
       <label>Model</label>
       <select id="s-openrouter_model">
-        <option value="google/gemini-2.0-flash-lite">Gemini 2.0 Flash Lite (Fast, Free)</option>
+        <option value="google/gemini-2.0-flash-lite-001">Gemini 2.0 Flash Lite (Fast, Free)</option>
         <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
         <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
         <option value="openai/gpt-4o">GPT-4o</option>
@@ -753,7 +753,7 @@
       const res = await fetch('/api/settings');
       const s = await res.json();
       document.getElementById('s-openrouter_api_key').value = s.openrouter_api_key || '';
-      document.getElementById('s-openrouter_model').value = s.openrouter_model || 'google/gemini-2.0-flash-lite';
+      document.getElementById('s-openrouter_model').value = s.openrouter_model || 'google/gemini-2.0-flash-lite-001';
       document.getElementById('s-tts_provider').value = s.tts_provider || 'azure';
       document.getElementById('s-azure_tts_key').value = s.azure_tts_key || '';
       document.getElementById('s-azure_tts_region').value = s.azure_tts_region || 'eastus';
