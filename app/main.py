@@ -46,7 +46,8 @@ PIPELINE_STEPS = [
     "translate",
     "generate_tts",
     "assemble_audio",
-    "merge_video"
+    "merge_video",
+    "metadata"
 ]
 
 
@@ -97,6 +98,7 @@ RESUMABLE_STEPS = [
     "generate_tts",    # 4
     "assemble_audio",  # 5
     "merge_video",     # 6
+    "metadata",        # 7
 ]
 
 
@@ -224,8 +226,40 @@ def run_pipeline(job_id: str, resume_from: str = None):
                                       job_id=job_id, settings=settings,
                                       srt_path=current_srt_path)
 
-        update_job(job_id, status="completed", current_step="done", step_index=8,
-                   message="Dubbing complete!", output_filename=output_filename)
+        # ── Step 8: Translate title + embed metadata + generate thumbnail ────────
+        update_job(job_id, current_step="metadata", step_index=8,
+                   message="Generating title translation and thumbnail...")
+        from app import metadata as meta_mod
+        original_title = Path(job.get("original_filename", "video.mp4")).stem
+        translated_title = meta_mod.translate_title(
+            original_title,
+            settings.get("target_language", "Arabic"),
+            settings.get("openrouter_api_key", ""),
+            settings.get("openrouter_model", "google/gemini-2.0-flash-lite-001")
+        )
+
+        meta_output = str(OUTPUT_DIR / f"{job_id}_final.mp4")
+        meta_mod.embed_metadata(
+            output_path,
+            meta_output,
+            title=translated_title,
+            description=f"Dubbed in {settings.get('target_language','Arabic')} by AIDubbing",
+            language="ara" if settings.get("target_language", "Arabic") == "Arabic" else "und"
+        )
+        if os.path.exists(meta_output) and os.path.getsize(meta_output) > 0:
+            output_filename = f"{job_id}_final.mp4"
+        else:
+            meta_output = output_path
+
+        thumb_style = settings.get("thumbnail_style", "title_overlay")
+        thumbnail_path = meta_mod.generate_thumbnail(
+            meta_output, str(OUTPUT_DIR / job_id), translated_title, style=thumb_style
+        )
+
+        update_job(job_id, status="completed", current_step="done", step_index=9,
+                   message="Dubbing complete!", output_filename=output_filename,
+                   translated_title=translated_title,
+                   thumbnail_path=thumbnail_path)
 
     except Exception as e:
         logger.exception(f"Pipeline failed for job {job_id}")
@@ -450,6 +484,17 @@ async def download_srt(job_id: str):
         media_type="text/plain; charset=utf-8",
         filename=f"subtitles_{job_id[:8]}.srt"
     )
+
+
+@app.get("/api/thumbnail/{job_id}")
+def get_thumbnail(job_id: str):
+    """Return the generated thumbnail image for a completed job."""
+    job = read_job(job_id)
+    thumb = job.get("thumbnail_path", str(OUTPUT_DIR / job_id / "thumbnail.jpg"))
+    if not Path(thumb).exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(str(thumb), media_type="image/jpeg",
+                        filename=f"thumbnail_{job_id[:8]}.jpg")
 
 
 @app.get("/api/history")
