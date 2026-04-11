@@ -140,33 +140,60 @@ def _fallback_with_pitch(video_path: str, segments: list) -> tuple:
 
 def _pitch_gender_per_segment(video_path: str, segments: list) -> bool:
     """
-    Extract audio for EACH segment individually and estimate F0.
-    Sets seg['gender'] directly on each segment.
-    Female voices typically have F0 > 165 Hz, male < 165 Hz.
-    Returns True if at least one segment was successfully analysed.
+    Detect gender per speech turn (consecutive segments with no gap > 0.5 s).
+    Analysing whole turns (instead of individual short segments) is far more
+    robust — a single voiced segment can be too short to produce a stable F0.
+
+    Sets seg['gender'] on every segment in-place.
+    Returns True if at least one turn was successfully analysed.
     """
     try:
         import librosa
         import numpy as np
 
+        # ── 1. Group segments into speech turns ───────────────────────────────
+        TURN_GAP = 0.5   # seconds; a gap larger than this starts a new turn
+
+        turns: list[list[int]] = []   # list of lists of segment indices
+        current: list[int] = []
+        for i, seg in enumerate(segments):
+            if not current:
+                current.append(i)
+            else:
+                prev_end = segments[current[-1]]["end"]
+                if seg["start"] - prev_end > TURN_GAP:
+                    turns.append(current)
+                    current = [i]
+                else:
+                    current.append(i)
+        if current:
+            turns.append(current)
+
+        logger.info(f"Speaker: grouped {len(segments)} segments into {len(turns)} speech turns")
+
         any_success = False
 
-        for seg in segments:
-            duration = min(seg["end"] - seg["start"], 5.0)
+        for turn_idx, indices in enumerate(turns):
+            turn_start = segments[indices[0]]["start"]
+            turn_end   = segments[indices[-1]]["end"]
+            duration   = min(turn_end - turn_start, 10.0)
+
             if duration < 0.3:
-                seg.setdefault("gender", "male")
+                for i in indices:
+                    segments[i].setdefault("gender", "male")
                 continue
 
             tmp_wav = tempfile.mktemp(suffix=".wav")
             try:
                 ret = subprocess.run([
                     "ffmpeg", "-y", "-i", video_path,
-                    "-ss", str(seg["start"]), "-t", str(duration),
+                    "-ss", str(turn_start), "-t", str(duration),
                     "-ac", "1", "-ar", "16000", tmp_wav
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 if ret.returncode != 0 or not os.path.exists(tmp_wav):
-                    seg.setdefault("gender", "male")
+                    for i in indices:
+                        segments[i].setdefault("gender", "male")
                     continue
 
                 y, sr = librosa.load(tmp_wav, sr=16000)
@@ -177,15 +204,19 @@ def _pitch_gender_per_segment(video_path: str, segments: list) -> bool:
                     valid = valid[~np.isnan(valid)]
                     if len(valid) > 0:
                         mean_f0 = float(np.mean(valid))
-                        seg["gender"] = "female" if mean_f0 > 165 else "male"
+                        gender  = "female" if mean_f0 > 165 else "male"
+                        for i in indices:
+                            segments[i]["gender"] = gender
                         logger.info(
-                            f"Seg [{seg['start']:.1f}-{seg['end']:.1f}s]: "
-                            f"F0={mean_f0:.0f}Hz → {seg['gender']}"
+                            f"Turn {turn_idx+1}/{len(turns)} "
+                            f"[{turn_start:.1f}-{turn_end:.1f}s, {len(indices)} segs]: "
+                            f"F0={mean_f0:.0f}Hz → {gender}"
                         )
                         any_success = True
                         continue
 
-                seg.setdefault("gender", "male")
+                for i in indices:
+                    segments[i].setdefault("gender", "male")
 
             finally:
                 if os.path.exists(tmp_wav):
