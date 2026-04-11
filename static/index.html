@@ -348,6 +348,7 @@
   <div class="tab active" onclick="switchTab('dubbing')">🎙️ Dubbing</div>
   <div class="tab" onclick="switchTab('download')">⬇️ Download</div>
   <div class="tab" onclick="switchTab('settings')">⚙️ Settings</div>
+  <div class="tab" onclick="switchTab('history')">📋 History</div>
 </div>
 
 <!-- DUBBING PANEL -->
@@ -673,6 +674,16 @@
 
 </div>
 
+<!-- HISTORY PANEL -->
+<div id="panel-history" class="panel">
+  <div class="card">
+    <h3>📋 Job History</h3>
+    <div id="history-list">
+      <div style="color:#7b7b9a;font-size:13px;text-align:center;padding:24px 0;">Loading history…</div>
+    </div>
+  </div>
+</div>
+
 <script>
   let currentJobId = null;
   let pollInterval = null;
@@ -686,12 +697,13 @@
   function switchTab(tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    const panelMap = { dubbing: 0, settings: 1, download: 2 };
-    const tabMap   = { dubbing: 0, download: 1, settings: 2 };
+    const panelMap = { dubbing: 0, settings: 1, download: 2, history: 3 };
+    const tabMap   = { dubbing: 0, download: 1, settings: 2, history: 3 };
     const tabs   = document.querySelectorAll('.tab');
     const panels = document.querySelectorAll('.panel');
     tabs[tabMap[tab]]?.classList.add('active');
     panels[panelMap[tab]]?.classList.add('active');
+    if (tab === 'history') loadHistory();
   }
 
   // ---- Download tab ----
@@ -1101,6 +1113,75 @@
   }
 
   loadSettings();
+
+  // ---- History tab ----
+  async function loadHistory() {
+    const container = document.getElementById('history-list');
+    container.innerHTML = '<div style="color:#7b7b9a;font-size:13px;text-align:center;padding:24px 0;">Loading…</div>';
+    try {
+      const res = await fetch('/api/history');
+      const jobs = await res.json();
+      if (!jobs.length) {
+        container.innerHTML = '<div style="color:#7b7b9a;font-size:13px;text-align:center;padding:24px 0;">No jobs found yet. Upload a video in the Dubbing tab to get started.</div>';
+        return;
+      }
+      container.innerHTML = jobs.map(job => renderHistoryRow(job)).join('');
+    } catch (e) {
+      container.innerHTML = '<div style="color:#f87171;font-size:13px;text-align:center;padding:24px 0;">Failed to load history.</div>';
+    }
+  }
+
+  function renderHistoryRow(job) {
+    const statusColors = { completed: '#10b981', error: '#ef4444', running: '#f59e0b', uploaded: '#6366f1' };
+    const statusLabels = { completed: 'Completed', error: 'Failed', running: 'Running', uploaded: 'Queued' };
+    const color = statusColors[job.status] || '#7b7b9a';
+    const label = statusLabels[job.status] || job.status;
+
+    const name = job.original_filename
+      ? `<span style="font-weight:600;color:#c4c4e0;">${escHtml(job.original_filename)}</span>`
+      : `<span style="color:#7b7b9a;font-size:12px;">${job.job_id.slice(0, 8)}…</span>`;
+
+    const time = job.created_at
+      ? `<span style="font-size:11px;color:#7b7b9a;">${new Date(job.created_at).toLocaleString()}</span>`
+      : '';
+
+    const message = job.message
+      ? `<div style="font-size:12px;color:#9090b0;margin-top:3px;">${escHtml(job.message)}</div>`
+      : '';
+
+    let actions = '';
+    if (job.status === 'completed' && job.output_filename) {
+      actions += `<button class="btn btn-success" style="padding:5px 12px;font-size:12px;" onclick="window.open('/api/download/${job.job_id}','_blank')">⬇ Video</button>`;
+    }
+    if (job.srt_path) {
+      actions += `<button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;margin-left:6px;" onclick="window.open('/api/download-srt/${job.job_id}','_blank')">📄 SRT</button>`;
+    }
+    actions += `<button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;margin-left:6px;" onclick="loadJobIntoDubbing('${job.job_id}')">🔄 Load</button>`;
+
+    return `
+      <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid #2a2a4a;">
+        <span style="display:inline-block;min-width:80px;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600;text-align:center;background:${color}22;color:${color};border:1px solid ${color}55;">${label}</span>
+        <div style="flex:1;min-width:0;">
+          ${name} ${time}
+          ${message}
+        </div>
+        <div style="display:flex;align-items:center;flex-shrink:0;">${actions}</div>
+      </div>`;
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function loadJobIntoDubbing(jobId) {
+    currentJobId = jobId;
+    switchTab('dubbing');
+    document.getElementById('downloadBtn').classList.add('hidden');
+    document.getElementById('downloadSrtBtn').classList.add('hidden');
+    document.getElementById('retryBtn').classList.add('hidden');
+    document.getElementById('statusMsg').textContent = 'Loading job status…';
+    pollStatus();
+  }
 </script>
 </body>
 </html>
