@@ -14,13 +14,18 @@ def translate_batch(batch: list, api_key: str, model: str, target_language: str)
 
     system_prompt = f"""You are a professional dubbing translator.
 Translate the following dialogue to {target_language}.
+
+IMPORTANT: Identify narrator lines (third-person descriptions, scene descriptions,
+lines that are NOT direct dialogue between characters) and prefix them with [NARRATOR].
+All other character dialogue lines keep their original [SPEAKER_XX] label.
+
 Rules:
-- Maintain the same speaker labels
+- [NARRATOR] lines = descriptive narration, scene-setting, third-person commentary
+- [SPEAKER_XX] lines = direct character dialogue — keep the SPEAKER label
 - Keep translations natural and speakable (not literal)
 - Match the emotional tone of each line
 - Keep similar length to original when possible
-- Return ONLY the translated dialogue in the same format
-- Format: [SPEAKER_XX]: translated text"""
+- Return ONLY the translated dialogue in the same format"""
 
     payload = {
         "model": model,
@@ -55,16 +60,24 @@ Rules:
         )
 
     translated_text = response.json()["choices"][0]["message"]["content"]
-    lines = translated_text.strip().split("\n")
+    lines = [l for l in translated_text.strip().split("\n") if l.strip()]
 
     for i, seg in enumerate(batch):
         if i < len(lines):
-            line = lines[i]
-            if "]: " in line:
+            line = lines[i].strip()
+            if line.startswith("[NARRATOR]"):
+                # Strip the [NARRATOR] prefix and mark the segment
+                seg["is_narrator"] = True
+                text = line[len("[NARRATOR]"):].strip()
+                seg["translated"] = text.lstrip(":").strip()
+            elif "]: " in line:
+                seg["is_narrator"] = False
                 seg["translated"] = line.split("]: ", 1)[1].strip()
             else:
+                seg["is_narrator"] = False
                 seg["translated"] = line.strip()
         else:
+            seg["is_narrator"] = False
             seg["translated"] = seg["text"]
 
     return batch
