@@ -503,7 +503,7 @@
       <input type="password" id="s-openrouter_api_key" placeholder="sk-or-..." />
     </div>
     <div class="form-group">
-      <label>Model</label>
+      <label>Title Model (for metadata &amp; thumbnail title)</label>
       <select id="s-openrouter_model">
         <option value="google/gemini-2.0-flash-lite-001">Gemini 2.0 Flash Lite (Fast, Free)</option>
         <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
@@ -511,6 +511,15 @@
         <option value="openai/gpt-4o">GPT-4o</option>
         <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
         <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Translation Model (for dubbing)</label>
+      <select id="s-translation_model">
+        <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B (Best for Chinese→Arabic)</option>
+        <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+        <option value="google/gemini-2.0-flash-lite-001">Gemini 2.0 Flash Lite</option>
+        <option value="deepseek/deepseek-v3">DeepSeek V3</option>
       </select>
     </div>
     <div class="form-group">
@@ -873,6 +882,7 @@
       const s = await res.json();
       document.getElementById('s-openrouter_api_key').value = s.openrouter_api_key || '';
       document.getElementById('s-openrouter_model').value = s.openrouter_model || 'google/gemini-2.0-flash-lite-001';
+      document.getElementById('s-translation_model').value = s.translation_model || 'qwen/qwen-2.5-72b-instruct';
       document.getElementById('s-vocal_removal').value = s.vocal_removal || 'demucs';
       document.getElementById('s-tts_provider').value = s.tts_provider || 'azure';
       document.getElementById('s-azure_tts_key').value = s.azure_tts_key || '';
@@ -897,6 +907,7 @@
     const settings = {
       openrouter_api_key: document.getElementById('s-openrouter_api_key').value,
       openrouter_model: document.getElementById('s-openrouter_model').value,
+      translation_model: document.getElementById('s-translation_model').value,
       vocal_removal: document.getElementById('s-vocal_removal').value,
       tts_provider: document.getElementById('s-tts_provider').value,
       azure_tts_key: document.getElementById('s-azure_tts_key').value,
