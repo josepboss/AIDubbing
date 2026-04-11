@@ -397,7 +397,8 @@
         <div class="step-icon">3</div> Transcribe Speech (Whisper)
       </div>
       <div class="step" id="step-detect_speakers">
-        <div class="step-icon">4</div> Detect Speakers & Gender
+        <div class="step-icon">4</div> Detect Speakers &amp; Gender
+        <span id="speaker-method-badge" style="display:none;margin-left:10px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:0.5px;"></span>
       </div>
       <div class="step" id="step-translate">
         <div class="step-icon">5</div> Translate to Arabic (OpenRouter)
@@ -901,6 +902,12 @@
     }, 1500);
   }
 
+  const SPEAKER_METHOD_LABELS = {
+    pyannote:       { label: 'pyannote AI',      bg: '#10b981', color: '#fff' },
+    pitch_analysis: { label: 'Pitch Analysis',   bg: '#6366f1', color: '#fff' },
+    alternating:    { label: 'Alternating',      bg: '#f59e0b', color: '#1a1a2e' },
+  };
+
   function updateUI(job) {
     document.getElementById('statusMsg').textContent = job.message || '';
     const stepIdx = job.step_index || 0;
@@ -913,6 +920,18 @@
       if (i < stepIdx) el.classList.add('done');
       else if (job.current_step === s) el.classList.add('active');
     });
+
+    // Speaker method badge
+    const badge = document.getElementById('speaker-method-badge');
+    if (job.speaker_method && SPEAKER_METHOD_LABELS[job.speaker_method]) {
+      const info = SPEAKER_METHOD_LABELS[job.speaker_method];
+      badge.textContent = info.label;
+      badge.style.background = info.bg;
+      badge.style.color = info.color;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
 
     if (job.status === 'completed') {
       STEP_ORDER.forEach(s => {
