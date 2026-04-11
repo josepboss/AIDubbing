@@ -5,7 +5,7 @@ import logging
 import threading
 import subprocess
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -181,6 +181,10 @@ def run_pipeline(job_id: str, resume_from: str = None):
         if resume_idx <= 4:
             update_job(job_id, current_step="generate_tts", step_index=5,
                        message="Generating dubbed audio with AI voices...")
+            # Merge per-job voice overrides into settings (highest priority)
+            for key in ("narrator_voice", "narrator_gender", "male_voice", "female_voice"):
+                if job.get(key):
+                    settings[key] = job[key]
             from app.dub import create_dubbed_audio, get_video_duration
             duration = get_video_duration(video_path)
             create_dubbed_audio(segments, settings, dubbed_audio_path, duration)
@@ -254,10 +258,22 @@ async def upload_video(file: UploadFile = File(...)):
 
 
 @app.post("/api/process/{job_id}")
-def process_job(job_id: str):
+async def process_job(job_id: str, request: Request):
     job = read_job(job_id)
     if job["status"] == "running":
         raise HTTPException(status_code=409, detail="Job is already running")
+
+    # Accept optional voice settings in request body
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    voice_keys = ("narrator_voice", "narrator_gender", "male_voice", "female_voice")
+    updates = {k: body[k] for k in voice_keys if k in body}
+    if updates:
+        update_job(job_id, **updates)
+        logger.info(f"Job {job_id} voice settings: {updates}")
 
     thread = threading.Thread(target=run_pipeline, args=(job_id,), daemon=True)
     thread.start()
