@@ -339,6 +339,7 @@
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('dubbing')">🎙️ Dubbing</div>
+  <div class="tab" onclick="switchTab('download')">⬇️ Download</div>
   <div class="tab" onclick="switchTab('settings')">⚙️ Settings</div>
 </div>
 
@@ -535,6 +536,71 @@
   </div>
 </div>
 
+<!-- DOWNLOAD PANEL -->
+<div id="panel-download" class="panel">
+
+  <div class="card">
+    <h3>Video Downloader</h3>
+    <p style="font-size:13px;color:#7b7b9a;margin-bottom:16px;">Download videos from YOUKU, iQIYI, WeTV, YouTube, Bilibili and 1000+ sites directly to the server, then send to the dubbing pipeline.</p>
+
+    <div class="form-group">
+      <label>Video URL</label>
+      <input type="text" id="dl-url" placeholder="https://v.youku.com/... or https://www.iqiyi.com/..." />
+    </div>
+
+    <button class="btn btn-secondary" onclick="fetchVideoInfo()" style="margin-bottom:12px;">
+      🔍 Check Video
+    </button>
+
+    <div id="dl-video-info" style="display:none;margin-bottom:16px;padding:14px;background:#0f0f1a;border:1px solid #2a2a4a;border-radius:10px;">
+      <div style="font-size:14px;font-weight:600;color:#c4c4e0;margin-bottom:4px;" id="dl-video-title"></div>
+      <div style="font-size:12px;color:#7b7b9a;" id="dl-video-meta"></div>
+    </div>
+
+    <div class="form-group">
+      <label>Quality</label>
+      <select id="dl-quality">
+        <option value="720p">720p (Recommended)</option>
+        <option value="best">1080p Best</option>
+        <option value="480p">480p (Faster)</option>
+      </select>
+    </div>
+
+    <button class="btn btn-primary hidden" id="dl-start-btn" onclick="startDownload()" style="margin-bottom:16px;">
+      ⬇️ Download to Server
+    </button>
+
+    <div id="dl-progress" style="display:none;margin-top:4px;">
+      <div class="progress-bar-wrap">
+        <div id="dl-bar" class="progress-bar" style="background:linear-gradient(90deg,#a855f7,#ec4899);width:0%"></div>
+      </div>
+      <div class="status-msg" id="dl-status-msg"></div>
+    </div>
+
+    <div id="dl-complete" style="display:none;margin-top:12px;padding:14px;background:rgba(16,185,129,0.08);border:1px solid #10b981;border-radius:10px;">
+      <div style="color:#6ee7b7;font-weight:600;margin-bottom:10px;">Download complete!</div>
+      <button class="btn btn-success" onclick="sendToDubbing()">🎙️ Send to Dubbing Pipeline</button>
+    </div>
+
+    <div id="dl-error" style="display:none;margin-top:12px;" class="alert alert-error"></div>
+  </div>
+
+  <div class="card">
+    <h3>Supported Sites</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;">
+      <span style="font-size:13px;color:#9090b0;">✅ YOUKU</span>
+      <span style="font-size:13px;color:#9090b0;">✅ iQIYI</span>
+      <span style="font-size:13px;color:#9090b0;">✅ WeTV</span>
+      <span style="font-size:13px;color:#9090b0;">✅ YouTube</span>
+      <span style="font-size:13px;color:#9090b0;">✅ Bilibili</span>
+      <span style="font-size:13px;color:#9090b0;">✅ Vimeo</span>
+      <span style="font-size:13px;color:#9090b0;">✅ Dailymotion</span>
+      <span style="font-size:13px;color:#9090b0;">✅ 1000+ more</span>
+    </div>
+  </div>
+
+</div>
+
 <script>
   let currentJobId = null;
   let pollInterval = null;
@@ -548,11 +614,132 @@
   function switchTab(tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    const tabs = document.querySelectorAll('.tab');
+    const panelMap = { dubbing: 0, settings: 1, download: 2 };
+    const tabMap   = { dubbing: 0, download: 1, settings: 2 };
+    const tabs   = document.querySelectorAll('.tab');
     const panels = document.querySelectorAll('.panel');
-    if (tab === 'dubbing') { tabs[0].classList.add('active'); panels[0].classList.add('active'); }
-    else { tabs[1].classList.add('active'); panels[1].classList.add('active'); }
+    tabs[tabMap[tab]]?.classList.add('active');
+    panels[panelMap[tab]]?.classList.add('active');
   }
+
+  // ---- Download tab ----
+  let dlJobId = null;
+  let dlPollInterval = null;
+
+  async function fetchVideoInfo() {
+    const url = document.getElementById('dl-url').value.trim();
+    if (!url) return;
+    document.getElementById('dl-video-info').style.display = 'none';
+    document.getElementById('dl-start-btn').classList.add('hidden');
+    document.getElementById('dl-error').style.display = 'none';
+    document.getElementById('dl-complete').style.display = 'none';
+
+    try {
+      const res = await fetch('/api/download/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const data = await res.json();
+      if (data.success) {
+        document.getElementById('dl-video-title').textContent = data.title;
+        const mins = Math.floor(data.duration / 60);
+        const secs = data.duration % 60;
+        document.getElementById('dl-video-meta').textContent =
+          `${data.site} · ${mins}m ${secs}s · ${data.formats} formats available`;
+        document.getElementById('dl-video-info').style.display = 'block';
+        document.getElementById('dl-start-btn').classList.remove('hidden');
+      } else {
+        document.getElementById('dl-error').textContent = data.error;
+        document.getElementById('dl-error').style.display = 'block';
+      }
+    } catch (e) {
+      document.getElementById('dl-error').textContent = 'Request failed: ' + e.message;
+      document.getElementById('dl-error').style.display = 'block';
+    }
+  }
+
+  async function startDownload() {
+    const url = document.getElementById('dl-url').value.trim();
+    const quality = document.getElementById('dl-quality').value;
+    document.getElementById('dl-start-btn').disabled = true;
+    document.getElementById('dl-progress').style.display = 'block';
+    document.getElementById('dl-complete').style.display = 'none';
+    document.getElementById('dl-error').style.display = 'none';
+    document.getElementById('dl-bar').style.width = '0%';
+    document.getElementById('dl-status-msg').textContent = 'Starting download...';
+
+    try {
+      const res = await fetch('/api/download/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, quality })
+      });
+      const data = await res.json();
+      if (data.success) {
+        dlJobId = data.job_id;
+        if (dlPollInterval) clearInterval(dlPollInterval);
+        dlPollInterval = setInterval(pollDownloadStatus, 2000);
+      } else {
+        document.getElementById('dl-error').textContent = data.error;
+        document.getElementById('dl-error').style.display = 'block';
+        document.getElementById('dl-start-btn').disabled = false;
+      }
+    } catch (e) {
+      document.getElementById('dl-error').textContent = 'Request failed: ' + e.message;
+      document.getElementById('dl-error').style.display = 'block';
+      document.getElementById('dl-start-btn').disabled = false;
+    }
+  }
+
+  async function pollDownloadStatus() {
+    if (!dlJobId) return;
+    try {
+      const res = await fetch(`/api/download/status/${dlJobId}`);
+      const data = await res.json();
+      document.getElementById('dl-bar').style.width = (data.progress || 0) + '%';
+      document.getElementById('dl-status-msg').textContent = data.current_step || '';
+      if (data.status === 'ready') {
+        clearInterval(dlPollInterval);
+        document.getElementById('dl-complete').style.display = 'block';
+        document.getElementById('dl-start-btn').disabled = false;
+      } else if (data.status === 'failed') {
+        clearInterval(dlPollInterval);
+        document.getElementById('dl-error').textContent = data.error_message || 'Download failed';
+        document.getElementById('dl-error').style.display = 'block';
+        document.getElementById('dl-start-btn').disabled = false;
+      }
+    } catch (e) {
+      console.error('Poll error:', e);
+    }
+  }
+
+  async function sendToDubbing() {
+    if (!dlJobId) return;
+    try {
+      const res = await fetch(`/api/dub-from-download/${dlJobId}`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to create dub job');
+      }
+      const data = await res.json();
+      currentJobId = data.job_id;
+      switchTab('dubbing');
+      document.getElementById('progressCard').style.display = 'block';
+      setAllStepsPending();
+      markStepDone('upload');
+      updateProgress(1);
+      document.getElementById('processBtn').disabled = false;
+      document.getElementById('statusMsg').textContent = 'Video loaded from downloader. Click "Start Dubbing" to begin.';
+    } catch (e) {
+      document.getElementById('dl-error').textContent = 'Error: ' + e.message;
+      document.getElementById('dl-error').style.display = 'block';
+    }
+  }
+
+  document.getElementById('dl-url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') fetchVideoInfo();
+  });
 
   function updateTTSVisibility() {
     const provider = document.getElementById('s-tts_provider').value;
