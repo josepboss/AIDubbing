@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyd
+app/uploads/
+app/output/
+app/audio/
+app/transcripts/
+app/jobs/
+*.wav
+*.mp3
+*.mp4
+*.mkv
+.env
