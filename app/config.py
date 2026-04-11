@@ -16,7 +16,8 @@ DEFAULT_SETTINGS = {
     "elevenlabs_male_voice_id": "",
     "elevenlabs_female_voice_id": "",
     "target_language": "Arabic",
-    "whisper_model": "base"
+    "whisper_model": "base",
+    "hf_token": ""
 }
 
 
