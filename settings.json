@@ -1,0 +1,15 @@
+{
+  "openrouter_api_key": "",
+  "openrouter_model": "google/gemini-2.0-flash-lite",
+  "tts_provider": "azure",
+  "azure_tts_key": "",
+  "azure_tts_region": "eastus",
+  "male_voice": "ar-EG-ShakirNeural",
+  "female_voice": "ar-EG-SalmaNeural",
+  "openai_api_key": "",
+  "elevenlabs_api_key": "",
+  "elevenlabs_male_voice_id": "",
+  "elevenlabs_female_voice_id": "",
+  "target_language": "Arabic",
+  "whisper_model": "base"
+}
