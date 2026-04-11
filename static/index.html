@@ -354,6 +354,52 @@
 <div id="panel-dubbing" class="panel active">
 
   <div class="card">
+    <h3>🎙️ Voice Settings</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+      <div class="form-group">
+        <label>Narrator Gender</label>
+        <select id="narrator_gender">
+          <option value="female">Female (أنثى)</option>
+          <option value="male">Male (ذكر)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Narrator Voice</label>
+        <select id="narrator_voice">
+          <option value="ar-EG-SalmaNeural">ar-EG-SalmaNeural (Female — Egyptian)</option>
+          <option value="ar-SA-ZariyahNeural">ar-SA-ZariyahNeural (Female — Saudi)</option>
+          <option value="ar-EG-ShakirNeural">ar-EG-ShakirNeural (Male — Egyptian)</option>
+          <option value="ar-SA-HamedNeural">ar-SA-HamedNeural (Male — Saudi)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Male Character Voice</label>
+        <select id="dub_male_voice">
+          <option value="ar-EG-ShakirNeural">ar-EG-ShakirNeural (Egyptian)</option>
+          <option value="ar-SA-HamedNeural">ar-SA-HamedNeural (Saudi)</option>
+          <option value="ar-KW-FahedNeural">ar-KW-FahedNeural (Kuwaiti)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Female Character Voice</label>
+        <select id="dub_female_voice">
+          <option value="ar-EG-SalmaNeural">ar-EG-SalmaNeural (Egyptian)</option>
+          <option value="ar-SA-ZariyahNeural">ar-SA-ZariyahNeural (Saudi)</option>
+          <option value="ar-KW-NouraNeural">ar-KW-NouraNeural (Kuwaiti)</option>
+        </select>
+      </div>
+
+    </div>
+    <p style="font-size:12px;color:#7b7b9a;margin-top:8px;">
+      Narrator lines are auto-detected from the translation. Character voices are assigned by detected gender.
+    </p>
+  </div>
+
+  <div class="card">
     <h3>Upload Video</h3>
     <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
       <input type="file" id="fileInput" accept=".mp4,.mkv,.avi,.mov,.webm" onchange="handleFileSelect(this)" />
@@ -872,8 +918,19 @@
     if (!currentJobId) return;
     document.getElementById('processBtn').disabled = true;
 
+    const voiceSettings = {
+      narrator_gender: document.getElementById('narrator_gender').value,
+      narrator_voice:  document.getElementById('narrator_voice').value,
+      male_voice:      document.getElementById('dub_male_voice').value,
+      female_voice:    document.getElementById('dub_female_voice').value,
+    };
+
     try {
-      const res = await fetch(`/api/process/${currentJobId}`, { method: 'POST' });
+      const res = await fetch(`/api/process/${currentJobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(voiceSettings)
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || 'Failed to start');
