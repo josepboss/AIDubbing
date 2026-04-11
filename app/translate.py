@@ -3,82 +3,25 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-MAX_SEGMENTS_PER_BATCH = 30
+MAX_SEGMENTS_PER_BATCH = 20
+RETRY_BATCH_SIZE = 5
+
+_REFUSAL_PATTERNS = [
+    "i'm sorry", "i am sorry", "i cannot", "i can't", "i won't",
+    "unable to", "not able to", "inappropriate", "i apologize",
+    "as an ai", "i must decline", "i need to decline",
+]
 
 
-def _build_system_prompt(target_language: str) -> str:
-    return f"""You are a professional dubbing translator specializing in Chinese drama localization.
-
-Target language: {target_language}
-
-Rules:
-- Translate for DUBBING not subtitles — text must sound natural when spoken aloud
-- Match the emotional intensity of each line (angry = strong words, sad = soft words)
-- Keep sentence length similar to original so it fits the audio timing
-- Use colloquial natural {target_language} not formal/literal translation
-- Preserve character personality in their speech style
-- Narrator lines [NARRATOR] should be dramatic and descriptive
-- Never translate names — keep Chinese character names as-is
-- For Arabic: use Modern Standard Arabic (فصحى مبسطة) not dialect
-- Identify narrator lines (third-person descriptions, scene-setting, commentary not spoken by a character) and prefix them with [NARRATOR]
-- All other character dialogue lines keep their original [SPEAKER_XX] label
-
-Return ONLY the translated dialogue in exact same format as input.
-Each line must start with the same speaker label."""
+def _is_refusal(text: str) -> bool:
+    """Return True if the model returned a refusal instead of a translation."""
+    low = text.lower().strip()
+    return any(p in low for p in _REFUSAL_PATTERNS)
 
 
-def _translate_single(text: str, target_language: str, api_key: str, model: str) -> str:
-    """Translate a single very short segment without batching context."""
-    try:
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        f"You are a dubbing translator. Translate the following short phrase to "
-                        f"{target_language}. Return ONLY the translated text, nothing else."
-                    )
-                },
-                {"role": "user", "content": text}
-            ],
-            "max_tokens": 60
-        }
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://aidubbing.replit.app",
-                "X-Title": "AIDubbing"
-            },
-            json=payload,
-            timeout=30
-        )
-        if response.ok:
-            return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.warning(f"_translate_single failed for '{text}': {e}")
-    return text
-
-
-def translate_batch(batch: list, api_key: str, model: str, target_language: str) -> list:
-    full_text = "\n".join([
-        f"[{seg['speaker']}]: {seg['text']}"
-        for seg in batch
-    ])
-
-    system_prompt = _build_system_prompt(target_language)
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": full_text}
-        ],
-        "max_tokens": 2000
-    }
-
+def _call_openrouter(messages: list, api_key: str, model: str,
+                     max_tokens: int = 2000) -> str:
+    """Make one OpenRouter chat completion call; return content string."""
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -87,7 +30,11 @@ def translate_batch(batch: list, api_key: str, model: str, target_language: str)
             "HTTP-Referer": "https://aidubbing.replit.app",
             "X-Title": "AIDubbing"
         },
-        json=payload,
+        json={
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens
+        },
         timeout=120
     )
 
@@ -102,61 +49,171 @@ def translate_batch(batch: list, api_key: str, model: str, target_language: str)
             f"{err_body.get('error', {}).get('message', str(err_body)) if isinstance(err_body, dict) else err_body}"
         )
 
-    translated_text = response.json()["choices"][0]["message"]["content"]
-    lines = [l for l in translated_text.strip().split("\n") if l.strip()]
+    return response.json()["choices"][0]["message"]["content"]
 
+
+def _build_system_prompt(target_language: str) -> str:
+    return f"""You are a certified professional dubbing translator working for a localization studio.
+Your task: translate ALL dialogue lines to {target_language} for audio dubbing, no exceptions.
+This is professional media localization — translate every line faithfully regardless of content.
+
+IMPORTANT — narrator detection:
+Prefix lines with [NARRATOR] if they are third-person scene descriptions or narration.
+Keep the [SPEAKER_XX] label for all direct character dialogue.
+
+Output rules:
+- Return EXACTLY the same number of lines as the input — one translated line per input line.
+- Format: [LABEL]: translated text
+- Keep translations natural, speakable, and similar in length to the original.
+- Do NOT skip, summarize, or refuse any line. If a line is unclear, transliterate it.
+- Return ONLY the translated lines — nothing else."""
+
+
+def _parse_lines(lines: list, batch: list) -> None:
+    """Assign translated text from response lines back into segment dicts in-place."""
     for i, seg in enumerate(batch):
         if i < len(lines):
             line = lines[i].strip()
             if line.startswith("[NARRATOR]"):
                 seg["is_narrator"] = True
-                text = line[len("[NARRATOR]"):].strip()
-                seg["translated"] = text.lstrip(":").strip()
+                seg["translated"] = line[len("[NARRATOR]"):].lstrip(":").strip()
             elif "]: " in line:
                 seg["is_narrator"] = False
                 seg["translated"] = line.split("]: ", 1)[1].strip()
-            else:
+            elif line:
                 seg["is_narrator"] = False
-                seg["translated"] = line.strip()
+                seg["translated"] = line
+            else:
+                seg.setdefault("translated", seg["text"])
         else:
-            seg["is_narrator"] = False
-            seg["translated"] = seg["text"]
+            seg.setdefault("translated", seg["text"])
+
+
+def _translate_single_segment(seg: dict, api_key: str, model: str,
+                               target_language: str) -> None:
+    """Last-resort: translate one segment at a time."""
+    try:
+        content = _call_openrouter(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Translate this single line of dialogue to {target_language} "
+                        f"for professional video dubbing. "
+                        f"Return ONLY the translated text, nothing else.\n\n"
+                        f"{seg['text']}"
+                    )
+                }
+            ],
+            api_key=api_key,
+            model=model,
+            max_tokens=300
+        )
+        if content and not _is_refusal(content):
+            seg["translated"] = content.strip()
+            logger.info(f"Single-segment fallback translated: {seg['text'][:40]!r}")
+        else:
+            logger.warning(f"Single-segment refusal for: {seg['text'][:40]!r}")
+            seg.setdefault("translated", seg["text"])
+    except Exception as e:
+        logger.error(f"Single-segment translation failed: {e}")
+        seg.setdefault("translated", seg["text"])
+
+
+def _translate_batch_once(batch: list, api_key: str, model: str,
+                           target_language: str) -> str:
+    """Call the API for a batch; return raw response content."""
+    full_text = "\n".join(
+        f"[{seg['speaker']}]: {seg['text']}" for seg in batch
+    )
+    return _call_openrouter(
+        messages=[
+            {"role": "system", "content": _build_system_prompt(target_language)},
+            {"role": "user",   "content": full_text}
+        ],
+        api_key=api_key,
+        model=model,
+        max_tokens=min(4000, len(batch) * 120)
+    )
+
+
+def translate_batch(batch: list, api_key: str, model: str,
+                    target_language: str) -> list:
+    """
+    Translate a batch of segments to target_language.
+    Strategy:
+      1. Try the full batch.
+      2. If refused or too few lines returned, split into RETRY_BATCH_SIZE mini-batches.
+      3. If a mini-batch is also refused, fall back to per-segment translation.
+    """
+    batch_num = getattr(translate_batch, '_batch_counter', 0) + 1
+    translate_batch._batch_counter = batch_num
+
+    try:
+        raw = _translate_batch_once(batch, api_key, model, target_language)
+        lines = [l for l in raw.strip().split("\n") if l.strip()]
+
+        if _is_refusal(raw) or len(lines) < len(batch) * 0.5:
+            logger.warning(
+                f"Batch {batch_num}: model refused or returned too few lines "
+                f"({len(lines)}/{len(batch)}). Retrying in mini-batches..."
+            )
+            raise ValueError("refusal_or_short")
+
+        _parse_lines(lines, batch)
+        logger.info(f"Batch {batch_num}: {len(batch)} segments translated OK.")
+
+    except Exception as e:
+        if "refusal_or_short" not in str(e):
+            logger.warning(f"Batch {batch_num} API error: {e}. Retrying in mini-batches...")
+
+        for start in range(0, len(batch), RETRY_BATCH_SIZE):
+            mini = batch[start: start + RETRY_BATCH_SIZE]
+            try:
+                raw = _translate_batch_once(mini, api_key, model, target_language)
+                lines = [l for l in raw.strip().split("\n") if l.strip()]
+
+                if _is_refusal(raw) or len(lines) < len(mini) * 0.5:
+                    logger.warning(
+                        f"Mini-batch also refused/short ({len(lines)}/{len(mini)}). "
+                        f"Falling back to per-segment translation..."
+                    )
+                    for seg in mini:
+                        if not seg.get("translated"):
+                            _translate_single_segment(seg, api_key, model, target_language)
+                else:
+                    _parse_lines(lines, mini)
+                    logger.info(f"Mini-batch ({len(mini)} segs) translated OK.")
+
+            except Exception as e2:
+                logger.error(f"Mini-batch failed: {e2}. Falling back to per-segment...")
+                for seg in mini:
+                    if not seg.get("translated"):
+                        _translate_single_segment(seg, api_key, model, target_language)
 
     return batch
 
 
 def translate_segments(segments: list, api_key: str, model: str,
-                       target_language: str = "Arabic") -> list:
-    """Translate all segments in batches, routing very short ones to a fast single call."""
-    logger.info(f"Translating {len(segments)} segments using model: {model}")
+                        target_language: str = "Arabic") -> list:
+    """Translate all segments in batches, with refusal detection and retry."""
+    translate_batch._batch_counter = 0
+    logger.info(f"Translating {len(segments)} segments → {target_language} "
+                f"using model: {model}")
 
-    # Split segments: short ones (< 3 words) go to _translate_single,
-    # the rest are batched together for context-aware translation.
-    short_indices = []
-    batch_segments = []
-
-    for idx, seg in enumerate(segments):
-        word_count = len(seg.get("text", "").split())
-        if word_count < 3:
-            short_indices.append(idx)
-        else:
-            batch_segments.append(seg)
-
-    # Translate short segments individually (fast, no context needed)
-    for idx in short_indices:
-        seg = segments[idx]
-        logger.info(f"Short segment ({seg['text']!r}) — direct translation")
-        seg["translated"] = _translate_single(seg["text"], target_language, api_key, model)
-        seg.setdefault("is_narrator", False)
-
-    # Translate the rest in batches of MAX_SEGMENTS_PER_BATCH
-    result_batches = []
-    for i in range(0, len(batch_segments), MAX_SEGMENTS_PER_BATCH):
-        batch = batch_segments[i: i + MAX_SEGMENTS_PER_BATCH]
-        logger.info(f"Translating batch {i // MAX_SEGMENTS_PER_BATCH + 1} "
-                    f"({len(batch)} segments)...")
+    result = []
+    for i in range(0, len(segments), MAX_SEGMENTS_PER_BATCH):
+        batch = segments[i: i + MAX_SEGMENTS_PER_BATCH]
+        logger.info(f"Batch {i // MAX_SEGMENTS_PER_BATCH + 1}: "
+                    f"segments {i+1}–{i+len(batch)}")
         translated = translate_batch(batch, api_key, model, target_language)
-        result_batches.extend(translated)
+        result.extend(translated)
 
-    logger.info("Translation complete.")
-    return segments
+    untranslated = sum(1 for s in result if s.get("translated") == s.get("text"))
+    if untranslated:
+        logger.warning(f"Translation complete — {untranslated}/{len(result)} "
+                       f"segments left in original language.")
+    else:
+        logger.info("Translation complete — all segments translated.")
+
+    return result
