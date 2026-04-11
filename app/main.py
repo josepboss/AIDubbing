@@ -92,7 +92,8 @@ def run_pipeline(job_id: str):
         update_job(job_id, current_step="detect_speakers", step_index=3,
                    message="Detecting speakers and gender...")
         from app.speaker import detect_speakers
-        segments = detect_speakers(video_path, segments)
+        hf_token = settings.get("hf_token", "")
+        segments = detect_speakers(video_path, segments, hf_token=hf_token)
 
         update_job(job_id, current_step="translate", step_index=4,
                    message=f"Translating to {settings.get('target_language', 'Arabic')}...")
