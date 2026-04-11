@@ -200,7 +200,8 @@ def run_pipeline(job_id: str, resume_from: str = None):
         from app.dub import merge_video_with_dubbed_audio
         output_filename = f"{job_id}_dubbed.mp4"
         output_path = str(OUTPUT_DIR / output_filename)
-        merge_video_with_dubbed_audio(video_path, dubbed_audio_path, output_path)
+        merge_video_with_dubbed_audio(video_path, dubbed_audio_path, output_path,
+                                      job_id=job_id, settings=settings)
 
         update_job(job_id, status="completed", current_step="done", step_index=8,
                    message="Dubbing complete!", output_filename=output_filename)
