@@ -6,10 +6,12 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 
-def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> list:
+def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> tuple:
     """
     Uses pyannote.audio to detect male/female speakers.
     Falls back to pitch-based gender detection if pyannote fails.
+    Returns (segments, method_name) where method_name is one of:
+      'pyannote' | 'pitch_analysis' | 'alternating'
     """
     try:
         from pyannote.audio import Pipeline
@@ -37,7 +39,8 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> list
         for seg in segments:
             seg["gender"] = gender_map.get(seg["speaker"], "male")
 
-        return segments
+        logger.info("Speaker detection: pyannote/speaker-diarization-3.1")
+        return segments, "pyannote"
 
     except Exception as e:
         logger.warning(f"Speaker detection failed: {e} — using pitch-based fallback")
@@ -90,24 +93,28 @@ def _detect_gender_pyannote(video_path, speakers, diarization):
         return {spk: "male" for spk in speakers}
 
 
-def _fallback_with_pitch(video_path: str, segments: list) -> list:
+def _fallback_with_pitch(video_path: str, segments: list) -> tuple:
     """
     No pyannote available. Try pitch analysis per speaker using ffmpeg + librosa.
     Falls back to alternating male/female only if pitch analysis also fails.
+    Returns (segments, method_name).
     """
     speakers = list(dict.fromkeys(s["speaker"] for s in segments))
     gender_map = _pitch_gender_for_speakers(video_path, segments, speakers)
 
-    if not gender_map:
-        # Last resort: alternate by speaker order
-        logger.info("Using alternating gender fallback")
+    if gender_map:
+        method = "pitch_analysis"
+        logger.info("Speaker gender: pitch analysis (F0 estimation)")
+    else:
+        method = "alternating"
+        logger.info("Speaker gender: alternating fallback")
         gender_map = {spk: ("male" if i % 2 == 0 else "female")
                       for i, spk in enumerate(speakers)}
 
     for seg in segments:
         seg["gender"] = gender_map.get(seg["speaker"], "male")
 
-    return segments
+    return segments, method
 
 
 def _pitch_gender_for_speakers(video_path: str, segments: list, speakers: list):
