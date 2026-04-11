@@ -5,7 +5,7 @@ import os
 logger = logging.getLogger(__name__)
 
 
-def detect_speakers(video_path: str, segments: list) -> list:
+def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> list:
     """
     Uses pyannote.audio to detect male/female speakers.
     Falls back to alternating male/female if pyannote fails.
@@ -13,9 +13,12 @@ def detect_speakers(video_path: str, segments: list) -> list:
     try:
         from pyannote.audio import Pipeline
 
+        if not hf_token:
+            raise ValueError("No HuggingFace token — using fallback")
+
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=os.environ.get("HF_TOKEN", "")
+            use_auth_token=hf_token
         )
 
         diarization = pipeline(video_path)
