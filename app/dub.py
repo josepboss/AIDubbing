@@ -72,53 +72,69 @@ def _change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
 
 def separate_background_audio(video_path: str, job_id: str) -> str | None:
     """
-    Extract background audio (music + effects) without vocals
-    using demucs audio separation.
+    Extract background audio (music + effects) without vocals using demucs.
+    Uses the Python API directly (not the CLI subprocess) and feeds demucs a
+    pre-loaded torch tensor so that torchcodec is never invoked — bypassing
+    the missing libnppicc.so.13 that makes the CLI crash on this server.
     Returns path to no_vocals.wav, or None if separation fails.
     """
-    output_dir = f"app/audio/{job_id}"
-    os.makedirs(output_dir, exist_ok=True)
+    try:
+        import torch
+        import numpy as np
+        import librosa
+        import soundfile as sf
+        from demucs.pretrained import get_model
+        from demucs.apply import apply_model
 
-    audio_path = f"{output_dir}/original.wav"
-    ret = subprocess.run([
-        "ffmpeg", "-y", "-i", video_path,
-        "-ac", "2", "-ar", "44100",
-        "-vn", audio_path
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        output_dir = f"app/audio/{job_id}"
+        os.makedirs(output_dir, exist_ok=True)
 
-    if ret.returncode != 0 or not os.path.exists(audio_path):
-        logger.error("Failed to extract audio for demucs")
-        return None
+        # ── 1. Extract stereo 44.1 kHz WAV with ffmpeg ──────────────────────
+        audio_path = os.path.join(output_dir, "original.wav")
+        ret = subprocess.run([
+            "ffmpeg", "-y", "-i", video_path,
+            "-ac", "2", "-ar", "44100", "-vn", audio_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    logger.info("Separating vocals from background audio with demucs...")
+        if ret.returncode != 0 or not os.path.exists(audio_path):
+            logger.error("Failed to extract audio for demucs")
+            return None
 
-    result = subprocess.run([
-        "python3", "-m", "demucs",
-        "--two-stems", "vocals",
-        "--out", output_dir,
-        audio_path
-    ], capture_output=True, text=True)
+        # ── 2. Load WAV as torch tensor (shape: [channels, samples]) ─────────
+        logger.info("Loading audio for demucs separation...")
+        data, sr = sf.read(audio_path, always_2d=True)   # (samples, channels)
+        waveform = torch.tensor(data.T, dtype=torch.float32)  # (channels, samples)
+        waveform = waveform.unsqueeze(0)                       # (1, channels, samples)
 
-    if result.returncode != 0:
-        logger.error(f"Demucs failed: {result.stderr[-500:]}")
-        return None
+        # ── 3. Run demucs htdemucs model (two-stems: vocals / no_vocals) ─────
+        logger.info("Separating vocals from background audio with demucs...")
+        model = get_model("htdemucs")
+        model.eval()
 
-    # Demucs outputs to: {output_dir}/htdemucs/{stem_name}/no_vocals.wav
-    no_vocals_path = None
-    for root, dirs, files in os.walk(output_dir):
-        for f in files:
-            if "no_vocals" in f:
-                no_vocals_path = os.path.join(root, f)
-                break
-        if no_vocals_path:
-            break
+        with torch.no_grad():
+            sources = apply_model(model, waveform, device="cpu", progress=False)
+        # sources shape: (batch, stems, channels, samples)
+        # stem order: drums, bass, other, vocals  (htdemucs 4-stem)
+        # no_vocals = all stems except vocals
+        stem_names = model.sources   # e.g. ['drums', 'bass', 'other', 'vocals']
+        vocal_idx = stem_names.index("vocals")
+        no_vocals = torch.cat(
+            [sources[0, i] for i in range(len(stem_names)) if i != vocal_idx],
+            dim=0
+        )
+        # Sum stereo pairs: result shape (2, samples)
+        no_vocals_stereo = no_vocals.reshape(-1, 2, no_vocals.shape[-1]).sum(dim=0)
 
-    if no_vocals_path and os.path.exists(no_vocals_path):
+        # ── 4. Save no_vocals to WAV ─────────────────────────────────────────
+        no_vocals_path = os.path.join(output_dir, "no_vocals.wav")
+        sf.write(no_vocals_path, no_vocals_stereo.numpy().T, sr)
+
         logger.info(f"Background audio extracted: {no_vocals_path}")
         return no_vocals_path
 
-    logger.warning("Could not find no_vocals output from demucs")
-    return None
+    except Exception as e:
+        logger.error(f"Demucs separation failed: {e}")
+        return None
 
 
 def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
