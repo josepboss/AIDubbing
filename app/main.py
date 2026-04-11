@@ -29,6 +29,12 @@ STATIC_DIR = BASE_DIR / "static"
 for d in [UPLOADS_DIR, TRANSCRIPTS_DIR, AUDIO_DIR, OUTPUT_DIR, JOBS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+# Install Arabic/Unicode fonts for subtitle rendering (best-effort, silent)
+subprocess.run(
+    ["apt-get", "install", "-y", "fonts-arabic-extra", "fonts-noto-color-emoji"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+)
+
 app = FastAPI(title="AIDubbing", version="1.0.0", root_path="/dubbing")
 
 PIPELINE_STEPS = [
@@ -177,6 +183,16 @@ def run_pipeline(job_id: str, resume_from: str = None):
             )
             _save_ckpt(job_id, "translated", segments)
 
+            # Save SRT for the translated segments
+            from app.dub import generate_srt
+            srt_dir = OUTPUT_DIR / job_id
+            srt_dir.mkdir(parents=True, exist_ok=True)
+            srt_path = str(srt_dir / "subtitles.srt")
+            with open(srt_path, "w", encoding="utf-8") as f:
+                f.write(generate_srt(segments))
+            update_job(job_id, srt_path=srt_path)
+            logger.info(f"SRT saved: {srt_path}")
+
         # ── Step 5: Generate TTS ───────────────────────────────────────────────
         if resume_idx <= 4:
             update_job(job_id, current_step="generate_tts", step_index=5,
@@ -201,7 +217,8 @@ def run_pipeline(job_id: str, resume_from: str = None):
         output_filename = f"{job_id}_dubbed.mp4"
         output_path = str(OUTPUT_DIR / output_filename)
         merge_video_with_dubbed_audio(video_path, dubbed_audio_path, output_path,
-                                      job_id=job_id, settings=settings)
+                                      job_id=job_id, settings=settings,
+                                      srt_path=job.get("srt_path"))
 
         update_job(job_id, status="completed", current_step="done", step_index=8,
                    message="Dubbing complete!", output_filename=output_filename)
@@ -414,6 +431,20 @@ async def dub_from_download(download_job_id: str):
     write_job(dub_job_id, job_data)
     logger.info(f"Created dub job {dub_job_id} from download {download_job_id}")
     return {"job_id": dub_job_id}
+
+
+@app.get("/api/download-srt/{job_id}")
+async def download_srt(job_id: str):
+    """Download the generated SRT subtitle file for a job."""
+    job = read_job(job_id)
+    srt_path = job.get("srt_path", str(OUTPUT_DIR / job_id / "subtitles.srt"))
+    if not Path(srt_path).exists():
+        raise HTTPException(status_code=404, detail="SRT file not found. Run dubbing first.")
+    return FileResponse(
+        srt_path,
+        media_type="text/plain; charset=utf-8",
+        filename=f"subtitles_{job_id[:8]}.srt"
+    )
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
