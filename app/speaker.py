@@ -15,6 +15,7 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> tupl
     """
     try:
         from pyannote.audio import Pipeline
+        import torch
 
         if not hf_token:
             raise ValueError("No HuggingFace token — using fallback")
@@ -24,7 +25,25 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> tupl
             token=hf_token
         )
 
-        diarization = pipeline(video_path)
+        # torchcodec cannot decode video/audio directly in this environment
+        # (missing libnppicc.so). Pre-extract mono 16 kHz WAV with ffmpeg and
+        # pass pyannote a waveform dict to bypass the broken torchcodec path.
+        tmp_wav = tempfile.mktemp(suffix=".wav")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", video_path,
+                "-ac", "1", "-ar", "16000", tmp_wav
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            import librosa
+            data, sample_rate = librosa.load(tmp_wav, sr=16000, mono=True)
+            waveform = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
+            audio_input = {"waveform": waveform, "sample_rate": sample_rate}
+        finally:
+            if os.path.exists(tmp_wav):
+                os.remove(tmp_wav)
+
+        diarization = pipeline(audio_input)
 
         for seg in segments:
             mid = (seg["start"] + seg["end"]) / 2
