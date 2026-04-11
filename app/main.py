@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -270,7 +271,8 @@ async def upload_video(file: UploadFile = File(...)):
         "original_filename": file.filename,
         "video_path": video_path,
         "output_filename": None,
-        "steps": PIPELINE_STEPS
+        "steps": PIPELINE_STEPS,
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
     write_job(job_id, job_data)
 
@@ -448,6 +450,27 @@ async def download_srt(job_id: str):
         media_type="text/plain; charset=utf-8",
         filename=f"subtitles_{job_id[:8]}.srt"
     )
+
+
+@app.get("/api/history")
+def get_history():
+    """Return all dubbing jobs sorted by most recent first."""
+    jobs = []
+    for p in JOBS_DIR.glob("*.json"):
+        if p.name.startswith("dl_"):
+            continue
+        try:
+            with open(p) as f:
+                job = json.load(f)
+            # Use stored created_at, or fall back to file mtime
+            if "created_at" not in job:
+                mtime = p.stat().st_mtime
+                job["created_at"] = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+            jobs.append(job)
+        except Exception:
+            continue
+    jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
+    return jobs[:50]
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
