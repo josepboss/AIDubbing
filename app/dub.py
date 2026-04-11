@@ -207,7 +207,7 @@ def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
         escaped = srt_path.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
         subtitle_filter = (
             f"subtitles='{escaped}'"
-            f":force_style='FontName=Arial,FontSize=20,"
+            f":force_style='FontName=DejaVu Sans,FontSize=20,"
             f"PrimaryColour=&HFFFFFF,OutlineColour=&H000000,"
             f"Outline=2,Shadow=1,Alignment=2,MarginV=30'"
         )
@@ -228,8 +228,25 @@ def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
         + ["-shortest", output_path]
     )
 
-    subprocess.run(cmd, check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(cmd, check=False,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        err = result.stderr.decode(errors="replace").strip()
+        if has_srt:
+            # Subtitle burning failed — retry without subtitles so the job still completes
+            logger.error(f"ffmpeg subtitle burn failed (retrying without subtitles): {err[-800:]}")
+            cmd_no_sub = (
+                ["ffmpeg", "-y", "-i", video_path, "-i", dubbed_audio_path]
+                + extra_audio_inputs
+                + ["-filter_complex", audio_filter]
+                + ["-map", "0:v:0", "-map", "[aout]"]
+                + ["-c:v", "copy"]
+                + ["-shortest", output_path]
+            )
+            subprocess.run(cmd_no_sub, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            raise subprocess.CalledProcessError(result.returncode, cmd, stderr=result.stderr)
     return output_path
 
 
