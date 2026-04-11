@@ -137,11 +137,35 @@ def separate_background_audio(video_path: str, job_id: str) -> str | None:
         return None
 
 
+def generate_srt(segments: list) -> str:
+    """Generate SRT subtitle content from translated segments."""
+    srt_lines = []
+    counter = 1
+    for seg in segments:
+        text = seg.get("translated", "").strip()
+        if not text:
+            continue
+        start = _format_srt_time(seg["start"])
+        end = _format_srt_time(seg["end"])
+        srt_lines.append(f"{counter}\n{start} --> {end}\n{text}\n")
+        counter += 1
+    return "\n".join(srt_lines)
+
+
+def _format_srt_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
 def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
                                    output_path: str, job_id: str = "",
-                                   settings: dict = None) -> str:
+                                   settings: dict = None,
+                                   srt_path: str = None) -> str:
     """
-    Merge video with dubbed audio.
+    Merge video with dubbed audio and optionally burn subtitles.
     If vocal_removal is enabled (default), uses demucs to strip original
     vocals and keep only background music/effects at 40%.
     Falls back to original audio at 15% if demucs fails or is disabled.
@@ -155,42 +179,54 @@ def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
     if use_demucs and job_id:
         background_path = separate_background_audio(video_path, job_id)
 
+    # ── Audio filter ──────────────────────────────────────────────────────────
     if background_path and os.path.exists(background_path):
         logger.info("Using separated background audio (vocals removed)")
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", dubbed_audio_path,
-            "-i", background_path,
-            "-filter_complex",
+        extra_audio_inputs = ["-i", background_path]
+        audio_filter = (
             "[2:a]volume=0.4[bg];"
             "[1:a]volume=1.0[dub];"
-            "[bg][dub]amix=inputs=2:duration=longest[aout]",
-            "-map", "0:v:0",
-            "-map", "[aout]",
-            "-c:v", "copy",
-            "-shortest",
-            output_path
-        ]
+            "[bg][dub]amix=inputs=2:duration=longest[aout]"
+        )
     else:
         if use_demucs:
             logger.warning("Demucs failed — falling back to original audio at 15%")
         else:
             logger.info("Vocal removal disabled — using original audio at 15%")
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", dubbed_audio_path,
-            "-filter_complex",
+        extra_audio_inputs = []
+        audio_filter = (
             "[0:a]volume=0.15[original];"
             "[1:a]volume=1.0[dubbed];"
-            "[original][dubbed]amix=inputs=2:duration=longest[aout]",
-            "-map", "0:v:0",
-            "-map", "[aout]",
-            "-c:v", "copy",
-            "-shortest",
-            output_path
-        ]
+            "[original][dubbed]amix=inputs=2:duration=longest[aout]"
+        )
+
+    # ── Subtitle / video filter ───────────────────────────────────────────────
+    has_srt = srt_path and os.path.exists(srt_path)
+    if has_srt:
+        # Escape single quotes and colons for the ffmpeg subtitles filter
+        escaped = srt_path.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+        subtitle_filter = (
+            f"subtitles='{escaped}'"
+            f":force_style='FontName=Arial,FontSize=20,"
+            f"PrimaryColour=&HFFFFFF,OutlineColour=&H000000,"
+            f"Outline=2,Shadow=1,Alignment=2,MarginV=30'"
+        )
+        video_filter = ["-vf", subtitle_filter]
+        video_codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+        logger.info(f"Burning subtitles from {srt_path}")
+    else:
+        video_filter = []
+        video_codec = ["-c:v", "copy"]
+
+    cmd = (
+        ["ffmpeg", "-y", "-i", video_path, "-i", dubbed_audio_path]
+        + extra_audio_inputs
+        + ["-filter_complex", audio_filter]
+        + video_filter
+        + ["-map", "0:v:0", "-map", "[aout]"]
+        + video_codec
+        + ["-shortest", output_path]
+    )
 
     subprocess.run(cmd, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
