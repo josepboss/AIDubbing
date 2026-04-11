@@ -517,6 +517,18 @@
   </div>
 
   <div class="card">
+    <h3>Audio Processing</h3>
+    <div class="form-group">
+      <label>Vocal Removal</label>
+      <select id="s-vocal_removal">
+        <option value="demucs">Demucs (Best quality — slower)</option>
+        <option value="disabled">Disabled (keep original audio at 15%)</option>
+      </select>
+      <p style="font-size:12px;color:#7b7b9a;margin-top:6px;">
+        Removes original language vocals while keeping music and sound effects. Demucs takes extra time but produces cleaner results.
+      </p>
+    </div>
+
     <h3>Text-to-Speech Provider</h3>
     <div class="form-group">
       <label>TTS Provider</label>
@@ -811,6 +823,7 @@
       const s = await res.json();
       document.getElementById('s-openrouter_api_key').value = s.openrouter_api_key || '';
       document.getElementById('s-openrouter_model').value = s.openrouter_model || 'google/gemini-2.0-flash-lite-001';
+      document.getElementById('s-vocal_removal').value = s.vocal_removal || 'demucs';
       document.getElementById('s-tts_provider').value = s.tts_provider || 'azure';
       document.getElementById('s-azure_tts_key').value = s.azure_tts_key || '';
       document.getElementById('s-azure_tts_region').value = s.azure_tts_region || 'eastus';
@@ -833,6 +846,7 @@
     const settings = {
       openrouter_api_key: document.getElementById('s-openrouter_api_key').value,
       openrouter_model: document.getElementById('s-openrouter_model').value,
+      vocal_removal: document.getElementById('s-vocal_removal').value,
       tts_provider: document.getElementById('s-tts_provider').value,
       azure_tts_key: document.getElementById('s-azure_tts_key').value,
       azure_tts_region: document.getElementById('s-azure_tts_region').value,
