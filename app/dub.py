@@ -22,7 +22,8 @@ def create_dubbed_audio(segments: list, settings: dict, output_path: str,
             audio_bytes = generate_segment_audio(
                 seg["translated"],
                 seg.get("gender", "male"),
-                settings
+                settings,
+                is_narrator=seg.get("is_narrator", False)
             )
 
             segment_audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
