@@ -71,14 +71,18 @@ def _change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
 
 def merge_video_with_dubbed_audio(video_path: str, dubbed_audio_path: str,
                                    output_path: str) -> str:
-    """Replace original audio with dubbed audio"""
+    """Mix dubbed voices (100%) with original audio at 15% to keep background music/effects."""
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
         "-i", dubbed_audio_path,
-        "-c:v", "copy",
+        "-filter_complex",
+        "[0:a]volume=0.15[original];"
+        "[1:a]volume=1.0[dubbed];"
+        "[original][dubbed]amix=inputs=2:duration=longest[aout]",
         "-map", "0:v:0",
-        "-map", "1:a:0",
+        "-map", "[aout]",
+        "-c:v", "copy",
         "-shortest",
         output_path
     ]
