@@ -5,11 +5,12 @@ import logging
 import threading
 import subprocess
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import load_settings, save_settings
+from app import downloader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +64,22 @@ def update_job(job_id: str, **kwargs):
     data = read_job(job_id)
     data.update(kwargs)
     write_job(job_id, data)
+
+
+# --- Download job helpers (stored in same JOBS_DIR with dl_ prefix) ---
+
+def save_dl_job(job_id: str, data: dict):
+    path = JOBS_DIR / f"dl_{job_id}.json"
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_dl_job(job_id: str) -> dict | None:
+    path = JOBS_DIR / f"dl_{job_id}.json"
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
 
 
 def run_pipeline(job_id: str):
@@ -219,6 +236,98 @@ def download_video(job_id: str):
         media_type="video/mp4",
         filename=f"{original}_arabic_dubbed.mp4"
     )
+
+
+@app.post("/api/download/info")
+async def get_download_info(body: dict):
+    url = body.get("url", "").strip()
+    if not url:
+        return {"success": False, "error": "URL is required"}
+    return downloader.get_video_info(url)
+
+
+@app.post("/api/download/start")
+async def start_download(body: dict, background_tasks: BackgroundTasks):
+    url = body.get("url", "").strip()
+    quality = body.get("quality", "720p")
+    if not url:
+        return {"success": False, "error": "URL is required"}
+
+    job_id = str(uuid.uuid4())[:8]
+    job = {
+        "job_id": job_id,
+        "status": "downloading",
+        "progress": 0,
+        "current_step": "Starting download...",
+        "source_url": url,
+        "video_path": None,
+        "error_message": None
+    }
+    save_dl_job(job_id, job)
+    background_tasks.add_task(_run_download, job_id, url, quality)
+    return {"success": True, "job_id": job_id}
+
+
+def _run_download(job_id: str, url: str, quality: str):
+    def progress_cb(pct):
+        job = load_dl_job(job_id)
+        if job:
+            job["progress"] = int(pct)
+            job["current_step"] = f"Downloading... {pct:.1f}%"
+            save_dl_job(job_id, job)
+
+    result = downloader.download_video(url, job_id, quality, progress_cb)
+    job = load_dl_job(job_id) or {}
+
+    if result["success"]:
+        job["status"] = "ready"
+        job["progress"] = 100
+        job["current_step"] = f"Downloaded ({result['file_size_mb']} MB) — Ready to dub"
+        job["video_path"] = result["video_path"]
+    else:
+        job["status"] = "failed"
+        job["error_message"] = result["error"]
+        job["current_step"] = "Download failed"
+
+    save_dl_job(job_id, job)
+
+
+@app.get("/api/download/status/{job_id}")
+async def download_job_status(job_id: str):
+    job = load_dl_job(job_id)
+    if not job:
+        return {"success": False, "error": "Job not found"}
+    return job
+
+
+@app.post("/api/dub-from-download/{download_job_id}")
+async def dub_from_download(download_job_id: str):
+    """Create a dubbing job from an already-downloaded video"""
+    dl_job = load_dl_job(download_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    if dl_job.get("status") != "ready":
+        raise HTTPException(status_code=400, detail="Download not complete yet")
+
+    video_path = dl_job.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Downloaded video file not found")
+
+    dub_job_id = str(uuid.uuid4())
+    job_data = {
+        "job_id": dub_job_id,
+        "status": "uploaded",
+        "current_step": "upload",
+        "step_index": 0,
+        "message": "Video loaded from downloader. Ready to process.",
+        "original_filename": Path(video_path).name,
+        "video_path": video_path,
+        "output_filename": None,
+        "steps": PIPELINE_STEPS
+    }
+    write_job(dub_job_id, job_data)
+    logger.info(f"Created dub job {dub_job_id} from download {download_job_id}")
+    return {"job_id": dub_job_id}
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
