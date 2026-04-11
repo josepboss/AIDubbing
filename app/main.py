@@ -82,61 +82,111 @@ def load_dl_job(job_id: str) -> dict | None:
         return json.load(f)
 
 
-def run_pipeline(job_id: str):
+RESUMABLE_STEPS = [
+    "extract_audio",   # 0
+    "transcribe",      # 1
+    "detect_speakers", # 2
+    "translate",       # 3
+    "generate_tts",    # 4
+    "assemble_audio",  # 5
+    "merge_video",     # 6
+]
+
+
+def _ckpt(job_id: str, name: str) -> str:
+    """Checkpoint file path for a given step name."""
+    return str(TRANSCRIPTS_DIR / f"{job_id}_{name}.json")
+
+
+def _load_ckpt(job_id: str, name: str):
+    p = _ckpt(job_id, name)
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return None
+
+
+def _save_ckpt(job_id: str, name: str, data):
+    with open(_ckpt(job_id, name), "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def run_pipeline(job_id: str, resume_from: str = None):
     try:
         job = read_job(job_id)
         video_path = job["video_path"]
         settings = load_settings()
 
-        update_job(job_id, status="running", current_step="extract_audio",
-                   step_index=1, message="Extracting audio from video...")
         audio_path = str(AUDIO_DIR / f"{job_id}.wav")
-        subprocess.run([
-            "ffmpeg", "-y", "-i", video_path,
-            "-ac", "1", "-ar", "16000",
-            audio_path
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        update_job(job_id, current_step="transcribe", step_index=2,
-                   message="Transcribing speech with Whisper...")
-        from app.transcribe import transcribe_video
-        segments = transcribe_video(video_path, settings.get("whisper_model", "base"))
-
-        transcript_path = str(TRANSCRIPTS_DIR / f"{job_id}.json")
-        with open(transcript_path, "w") as f:
-            json.dump(segments, f, indent=2, ensure_ascii=False)
-
-        update_job(job_id, current_step="detect_speakers", step_index=3,
-                   message="Detecting speakers and gender...")
-        from app.speaker import detect_speakers
-        hf_token = settings.get("hf_token", "")
-        segments = detect_speakers(video_path, segments, hf_token=hf_token)
-
-        update_job(job_id, current_step="translate", step_index=4,
-                   message=f"Translating to {settings.get('target_language', 'Arabic')}...")
-        if not settings.get("openrouter_api_key"):
-            raise ValueError("OpenRouter API key is not set. Please configure it in Settings.")
-        from app.translate import translate_segments
-        segments = translate_segments(
-            segments,
-            settings["openrouter_api_key"],
-            settings.get("openrouter_model", "google/gemini-2.0-flash-lite-001"),
-            settings.get("target_language", "Arabic")
-        )
-
-        with open(transcript_path, "w") as f:
-            json.dump(segments, f, indent=2, ensure_ascii=False)
-
-        update_job(job_id, current_step="generate_tts", step_index=5,
-                   message="Generating dubbed audio with AI voices...")
-        from app.dub import create_dubbed_audio, get_video_duration
         dubbed_audio_path = str(AUDIO_DIR / f"{job_id}_dubbed.mp3")
-        duration = get_video_duration(video_path)
-        create_dubbed_audio(segments, settings, dubbed_audio_path, duration)
 
-        update_job(job_id, current_step="assemble_audio", step_index=6,
-                   message="Assembling dubbed audio track...")
+        resume_idx = RESUMABLE_STEPS.index(resume_from) if resume_from in RESUMABLE_STEPS else 0
 
+        # Load segments from the most recent checkpoint when resuming
+        segments = None
+        if resume_idx >= 4:
+            segments = _load_ckpt(job_id, "translated") or _load_ckpt(job_id, "speakers")
+        elif resume_idx >= 3:
+            segments = _load_ckpt(job_id, "speakers") or _load_ckpt(job_id, "transcribed")
+        elif resume_idx >= 2:
+            segments = _load_ckpt(job_id, "transcribed")
+
+        update_job(job_id, status="running")
+
+        # ── Step 1: Extract audio ──────────────────────────────────────────────
+        if resume_idx <= 0:
+            update_job(job_id, current_step="extract_audio", step_index=1,
+                       message="Extracting audio from video...")
+            subprocess.run([
+                "ffmpeg", "-y", "-i", video_path,
+                "-ac", "1", "-ar", "16000", audio_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # ── Step 2: Transcribe ─────────────────────────────────────────────────
+        if resume_idx <= 1:
+            update_job(job_id, current_step="transcribe", step_index=2,
+                       message="Transcribing speech with Whisper...")
+            from app.transcribe import transcribe_video
+            segments = transcribe_video(video_path, settings.get("whisper_model", "base"))
+            _save_ckpt(job_id, "transcribed", segments)
+
+        # ── Step 3: Speaker detection ──────────────────────────────────────────
+        if resume_idx <= 2:
+            update_job(job_id, current_step="detect_speakers", step_index=3,
+                       message="Detecting speakers and gender...")
+            from app.speaker import detect_speakers
+            segments = detect_speakers(video_path, segments, hf_token=settings.get("hf_token", ""))
+            _save_ckpt(job_id, "speakers", segments)
+
+        # ── Step 4: Translate ──────────────────────────────────────────────────
+        if resume_idx <= 3:
+            update_job(job_id, current_step="translate", step_index=4,
+                       message=f"Translating to {settings.get('target_language', 'Arabic')}...")
+            if not settings.get("openrouter_api_key"):
+                raise ValueError("OpenRouter API key is not set. Please configure it in Settings.")
+            from app.translate import translate_segments
+            segments = translate_segments(
+                segments,
+                settings["openrouter_api_key"],
+                settings.get("openrouter_model", "google/gemini-2.0-flash-lite-001"),
+                settings.get("target_language", "Arabic")
+            )
+            _save_ckpt(job_id, "translated", segments)
+
+        # ── Step 5: Generate TTS ───────────────────────────────────────────────
+        if resume_idx <= 4:
+            update_job(job_id, current_step="generate_tts", step_index=5,
+                       message="Generating dubbed audio with AI voices...")
+            from app.dub import create_dubbed_audio, get_video_duration
+            duration = get_video_duration(video_path)
+            create_dubbed_audio(segments, settings, dubbed_audio_path, duration)
+
+        # ── Step 6: Assemble audio ─────────────────────────────────────────────
+        if resume_idx <= 5:
+            update_job(job_id, current_step="assemble_audio", step_index=6,
+                       message="Assembling dubbed audio track...")
+
+        # ── Step 7: Merge video ────────────────────────────────────────────────
         update_job(job_id, current_step="merge_video", step_index=7,
                    message="Merging dubbed audio with video...")
         from app.dub import merge_video_with_dubbed_audio
@@ -144,12 +194,8 @@ def run_pipeline(job_id: str):
         output_path = str(OUTPUT_DIR / output_filename)
         merge_video_with_dubbed_audio(video_path, dubbed_audio_path, output_path)
 
-        update_job(job_id,
-                   status="completed",
-                   current_step="done",
-                   step_index=8,
-                   message="Dubbing complete!",
-                   output_filename=output_filename)
+        update_job(job_id, status="completed", current_step="done", step_index=8,
+                   message="Dubbing complete!", output_filename=output_filename)
 
     except Exception as e:
         logger.exception(f"Pipeline failed for job {job_id}")
@@ -211,8 +257,27 @@ def process_job(job_id: str):
 
     thread = threading.Thread(target=run_pipeline, args=(job_id,), daemon=True)
     thread.start()
-
     return {"job_id": job_id, "status": "started"}
+
+
+@app.post("/api/resume/{job_id}")
+def resume_job(job_id: str):
+    """Resume a failed job from the step it failed at, reusing all saved checkpoints."""
+    job = read_job(job_id)
+    if job["status"] == "running":
+        raise HTTPException(status_code=409, detail="Job is already running")
+    if job["status"] == "completed":
+        raise HTTPException(status_code=400, detail="Job already completed")
+
+    failed_step = job.get("current_step", "extract_audio")
+    # If the step is not resumable (e.g. "upload", "done") start fresh
+    if failed_step not in RESUMABLE_STEPS:
+        failed_step = "extract_audio"
+
+    logger.info(f"Resuming job {job_id} from step: {failed_step}")
+    thread = threading.Thread(target=run_pipeline, args=(job_id, failed_step), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "resumed", "from_step": failed_step}
 
 
 @app.get("/api/status/{job_id}")
