@@ -519,7 +519,7 @@
         <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B (Best for Chinese→Arabic)</option>
         <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
         <option value="google/gemini-2.0-flash-lite-001">Gemini 2.0 Flash Lite</option>
-        <option value="deepseek/deepseek-v3">DeepSeek V3</option>
+        <option value="deepseek/deepseek-chat">DeepSeek V3</option>
       </select>
     </div>
     <div class="form-group">
@@ -1078,7 +1078,7 @@
       showCompletionInfo(job);
     }
 
-    if (job.status === 'error') {
+    if (job.status === 'error' || job.status === 'failed') {
       showAlert('Error: ' + job.message, 'error');
       const currentEl = document.getElementById('step-' + job.current_step);
       if (currentEl) currentEl.className = 'step error';
