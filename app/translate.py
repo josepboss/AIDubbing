@@ -218,10 +218,17 @@ def translate_segments(segments: list, api_key: str, model: str,
         result.extend(translated)
 
     untranslated = sum(1 for s in result if s.get("translated") == s.get("text"))
-    if untranslated:
-        logger.warning(f"Translation complete — {untranslated}/{len(result)} "
-                       f"segments left in original language.")
+    total = len(result)
+
+    if untranslated == total:
+        raise RuntimeError(
+            f"Translation failed completely — 0/{total} segments were translated. "
+            f"Check that the model ID is correct and your OpenRouter API key has credits."
+        )
+    elif untranslated > total * 0.5:
+        logger.warning(f"Translation complete — only {total - untranslated}/{total} "
+                       f"segments translated ({untranslated} left in original language).")
     else:
-        logger.info("Translation complete — all segments translated.")
+        logger.info(f"Translation complete — {total - untranslated}/{total} segments translated.")
 
     return result
