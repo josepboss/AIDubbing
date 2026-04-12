@@ -134,9 +134,11 @@ def separate_background_audio(video_path: str, job_id: str) -> str | None:
                 waveform = torch.tensor(data.T, dtype=torch.float32).unsqueeze(0)
 
                 with torch.no_grad():
+                    # No segment= here — our 60-second outer chunks already
+                    # bound memory. Internal sub-segmentation caused reshape
+                    # errors when chunk length wasn't evenly divisible.
                     sources = apply_model(
-                        model, waveform, device="cpu",
-                        progress=False, segment=30, overlap=0.1
+                        model, waveform, device="cpu", progress=False
                     )
                 # sources: (1, n_stems, 2, samples)
                 # Sum all non-vocal stems into one stereo track
