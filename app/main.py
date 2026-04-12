@@ -230,7 +230,12 @@ def run_pipeline(job_id: str, resume_from: str = None):
         update_job(job_id, current_step="metadata", step_index=8,
                    message="Generating title translation and thumbnail...")
         from app import metadata as meta_mod
-        original_title = Path(job.get("original_filename", "video.mp4")).stem
+        # Prefer the stored video_title (from YouTube download info) over
+        # the filename stem, which is just "video" when using the fixed downloader
+        original_title = (
+            job.get("video_title")
+            or Path(job.get("original_filename", "video.mp4")).stem
+        )
         translated_title = meta_mod.translate_title(
             original_title,
             settings.get("target_language", "Arabic"),
@@ -463,6 +468,9 @@ async def dub_from_download(download_job_id: str):
         "step_index": 0,
         "message": "Video loaded from downloader. Ready to process.",
         "original_filename": Path(video_path).name,
+        # Carry the real video title from the download job so the metadata step
+        # can translate something meaningful instead of just "video"
+        "video_title": dl_job.get("title", ""),
         "video_path": video_path,
         "output_filename": None,
         "steps": PIPELINE_STEPS
