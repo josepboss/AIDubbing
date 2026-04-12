@@ -81,15 +81,13 @@ def _change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
 def separate_background_audio(video_path: str, job_id: str) -> str | None:
     """
     Extract background audio (music + effects) without vocals using demucs.
-    Uses the Python API directly (not the CLI subprocess) and feeds demucs a
-    pre-loaded torch tensor so that torchcodec is never invoked — bypassing
-    the missing libnppicc.so.13 that makes the CLI crash on this server.
+    Processes audio in 60-second chunks to avoid OOM on long videos — a 2-hour
+    video at 44.1kHz stereo float32 is ~2.5 GB if loaded all at once.
     Returns path to no_vocals.wav, or None if separation fails.
     """
     try:
         import torch
         import numpy as np
-        import librosa
         import soundfile as sf
         from demucs.pretrained import get_model
         from demucs.apply import apply_model
@@ -108,34 +106,58 @@ def separate_background_audio(video_path: str, job_id: str) -> str | None:
             logger.error("Failed to extract audio for demucs")
             return None
 
-        # ── 2. Load WAV as torch tensor (shape: [channels, samples]) ─────────
-        logger.info("Loading audio for demucs separation...")
-        data, sr = sf.read(audio_path, always_2d=True)   # (samples, channels)
-        waveform = torch.tensor(data.T, dtype=torch.float32)  # (channels, samples)
-        waveform = waveform.unsqueeze(0)                       # (1, channels, samples)
-
-        # ── 3. Run demucs htdemucs model (two-stems: vocals / no_vocals) ─────
-        logger.info("Separating vocals from background audio with demucs...")
+        # ── 2. Load model once (shared across all chunks) ────────────────────
+        logger.info("Loading demucs model...")
         model = get_model("htdemucs")
         model.eval()
-
-        with torch.no_grad():
-            sources = apply_model(model, waveform, device="cpu", progress=False)
-        # sources shape: (batch, stems, channels, samples)
-        # stem order: drums, bass, other, vocals  (htdemucs 4-stem)
-        # no_vocals = all stems except vocals
-        stem_names = model.sources   # e.g. ['drums', 'bass', 'other', 'vocals']
+        stem_names = model.sources          # ['drums', 'bass', 'other', 'vocals']
         vocal_idx = stem_names.index("vocals")
-        no_vocals = torch.cat(
-            [sources[0, i] for i in range(len(stem_names)) if i != vocal_idx],
-            dim=0
-        )
-        # Sum stereo pairs: result shape (2, samples)
-        no_vocals_stereo = no_vocals.reshape(-1, 2, no_vocals.shape[-1]).sum(dim=0)
 
-        # ── 4. Save no_vocals to WAV ─────────────────────────────────────────
+        # ── 3. Process audio in 60-second chunks to bound RAM usage ──────────
+        logger.info("Separating vocals from background audio in chunks...")
+        info = sf.info(audio_path)
+        sr = info.samplerate
+        chunk_samples = sr * 60             # 60 seconds per chunk
+        no_vocals_chunks = []
+
+        with sf.SoundFile(audio_path, "r") as f:
+            chunk_num = 0
+            while True:
+                data = f.read(chunk_samples)   # (samples, 2) or empty
+                if len(data) == 0:
+                    break
+                chunk_num += 1
+                if data.ndim == 1:
+                    data = np.stack([data, data], axis=1)   # mono → fake stereo
+
+                # (samples, 2) → (2, samples) → (1, 2, samples)
+                waveform = torch.tensor(data.T, dtype=torch.float32).unsqueeze(0)
+
+                with torch.no_grad():
+                    sources = apply_model(
+                        model, waveform, device="cpu",
+                        progress=False, segment=30, overlap=0.1
+                    )
+                # sources: (1, n_stems, 2, samples)
+                # Sum all non-vocal stems into one stereo track
+                no_vocals_stereo = sum(
+                    sources[0, i] for i in range(len(stem_names)) if i != vocal_idx
+                )  # shape: (2, samples)
+
+                no_vocals_chunks.append(no_vocals_stereo.numpy().T)  # (samples, 2)
+
+                # Free tensors immediately to keep RAM low
+                del waveform, sources, no_vocals_stereo
+                logger.info(f"Demucs: processed chunk {chunk_num}")
+
+        if not no_vocals_chunks:
+            logger.error("No audio chunks were processed by demucs")
+            return None
+
+        # ── 4. Concatenate all chunks and save ───────────────────────────────
+        all_no_vocals = np.concatenate(no_vocals_chunks, axis=0)  # (total_samples, 2)
         no_vocals_path = os.path.join(output_dir, "no_vocals.wav")
-        sf.write(no_vocals_path, no_vocals_stereo.numpy().T, sr)
+        sf.write(no_vocals_path, all_no_vocals, sr)
 
         logger.info(f"Background audio extracted: {no_vocals_path}")
         return no_vocals_path
