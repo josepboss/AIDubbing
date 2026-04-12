@@ -77,7 +77,15 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> tupl
 
 
 def _detect_gender_pyannote(video_path, speakers, diarization):
-    """Pitch-based gender detection using pyannote diarization segments."""
+    """
+    Pitch-based gender detection per pyannote speaker.
+    Analyses up to MAX_TURNS turns per speaker and takes a majority vote
+    so that one noisy or music-heavy clip cannot skew the result.
+    """
+    MAX_TURNS   = 6     # max turns to sample per speaker
+    CLIP_SEC    = 5     # seconds to extract per turn
+    MIN_FRAMES  = 10    # voiced frames required to trust the reading
+
     try:
         import librosa
         import numpy as np
@@ -93,27 +101,61 @@ def _detect_gender_pyannote(video_path, speakers, diarization):
                 gender_map[speaker] = "male"
                 continue
 
-            turn = speaker_turns[0]
-            tmp_wav = tempfile.mktemp(suffix=".wav")
-            try:
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", video_path,
-                    "-ss", str(turn.start), "-t", "10",
-                    "-ac", "1", "-ar", "16000", tmp_wav
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Pick turns spread across the video (first, middle, last etc.)
+            step = max(1, len(speaker_turns) // MAX_TURNS)
+            sampled = speaker_turns[::step][:MAX_TURNS]
 
-                y, sr = librosa.load(tmp_wav, sr=16000)
-                f0, voiced, _ = librosa.pyin(y, fmin=50, fmax=500, sr=sr)
-                voiced_f0 = f0[voiced] if f0 is not None else []
-                import numpy as np
-                valid = [v for v in voiced_f0 if v and not (v != v)]
-                mean_pitch = float(np.mean(valid)) if valid else 150.0
-            finally:
-                if os.path.exists(tmp_wav):
-                    os.remove(tmp_wav)
+            female_votes = 0
+            male_votes   = 0
 
-            gender_map[speaker] = "female" if mean_pitch > 165 else "male"
-            logger.info(f"Speaker {speaker}: F0={mean_pitch:.0f}Hz → {gender_map[speaker]}")
+            for turn in sampled:
+                dur = min(turn.end - turn.start, CLIP_SEC)
+                if dur < 0.3:
+                    continue
+
+                tmp_wav = tempfile.mktemp(suffix=".wav")
+                try:
+                    subprocess.run([
+                        "ffmpeg", "-y", "-i", video_path,
+                        "-ss", str(turn.start), "-t", str(dur),
+                        "-ac", "1", "-ar", "16000", tmp_wav
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                    if not os.path.exists(tmp_wav):
+                        continue
+
+                    y, sr = librosa.load(tmp_wav, sr=16000)
+                    f0, voiced, _ = librosa.pyin(y, fmin=50, fmax=500, sr=sr)
+
+                    if f0 is None or voiced is None:
+                        continue
+
+                    valid = f0[voiced]
+                    valid = valid[~np.isnan(valid)]
+
+                    if len(valid) < MIN_FRAMES:
+                        continue   # not enough voiced frames — skip this clip
+
+                    mean_f0 = float(np.mean(valid))
+                    if mean_f0 > 165:
+                        female_votes += 1
+                    else:
+                        male_votes += 1
+
+                finally:
+                    if os.path.exists(tmp_wav):
+                        os.remove(tmp_wav)
+
+            if female_votes == 0 and male_votes == 0:
+                gender = "male"   # no usable clips found
+            else:
+                gender = "female" if female_votes >= male_votes else "male"
+
+            gender_map[speaker] = gender
+            logger.info(
+                f"Speaker {speaker}: {female_votes}×female {male_votes}×male "
+                f"→ {gender} (sampled {len(sampled)} turns)"
+            )
 
         return gender_map
 
