@@ -14,8 +14,16 @@ def create_dubbed_audio(segments: list, settings: dict, output_path: str,
 
     dubbed = AudioSegment.silent(duration=int(original_duration * 1000))
 
+    # Pre-compile label pattern for TTS safety guard
+    import re as _re
+    _LABEL_ONLY = _re.compile(r'^\[?(?:SPEAKER_\d+|NARRATOR)\]?\s*:?\s*$', _re.IGNORECASE)
+
     for i, seg in enumerate(segments):
-        if not seg.get("translated"):
+        text = seg.get("translated", "").strip()
+        if not text or _LABEL_ONLY.match(text):
+            # Skip segments with no translation or bare speaker labels
+            if text:
+                logger.warning(f"Segment {i}: skipping label-only translation: {text!r}")
             continue
 
         try:
