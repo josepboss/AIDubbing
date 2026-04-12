@@ -1,7 +1,12 @@
+import re
 import requests
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Matches any speaker/narrator label at the start of a line:
+#   [SPEAKER_01]:   [SPEAKER_01] :   SPEAKER_01:   [NARRATOR]:  etc.
+_LABEL_RE = re.compile(r'^\[?(?:SPEAKER_\d+|NARRATOR)\]?\s*:?\s*', re.IGNORECASE)
 
 MAX_SEGMENTS_PER_BATCH = 20
 RETRY_BATCH_SIZE = 5
@@ -74,17 +79,20 @@ def _parse_lines(lines: list, batch: list) -> None:
     for i, seg in enumerate(batch):
         if i < len(lines):
             line = lines[i].strip()
-            if line.startswith("[NARRATOR]"):
-                seg["is_narrator"] = True
-                seg["translated"] = line[len("[NARRATOR]"):].lstrip(":").strip()
-            elif "]: " in line:
-                seg["is_narrator"] = False
-                seg["translated"] = line.split("]: ", 1)[1].strip()
-            elif line:
-                seg["is_narrator"] = False
-                seg["translated"] = line
+
+            # Detect narrator flag before stripping
+            is_narrator = bool(re.match(r'^\[?NARRATOR\]?\s*:', line, re.IGNORECASE))
+
+            # Strip any leading speaker/narrator label (handles missing space after colon)
+            text = _LABEL_RE.sub('', line).strip()
+
+            if not text:
+                # Model returned a label with no content — skip TTS for this segment
+                seg["is_narrator"] = is_narrator
+                seg["translated"] = ""  # empty → dub.py will skip it silently
             else:
-                seg.setdefault("translated", seg["text"])
+                seg["is_narrator"] = is_narrator
+                seg["translated"] = text
         else:
             seg.setdefault("translated", seg["text"])
 
