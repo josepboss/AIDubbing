@@ -11,31 +11,58 @@ _FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 def translate_title(original_title: str, target_language: str,
                     api_key: str, model: str) -> str:
     """Translate video title to target language via OpenRouter."""
-    try:
-        response = requests.post(
+    import re as _re
+
+    # Strip YouTube hashtags before translation — they don't need translating
+    clean_title = _re.sub(r'#\S+', '', original_title).strip().strip('，。！？,.!?')
+    if not clean_title:
+        clean_title = original_title
+
+    prompt = (
+        f"Translate the following video title accurately into {target_language}.\n"
+        f"Rules:\n"
+        f"- Translate the MEANING faithfully — do not summarise, rewrite, or invent.\n"
+        f"- Do NOT add emojis, hashtags, or extra words.\n"
+        f"- Do NOT return a generic phrase like 'video' or 'watch now'.\n"
+        f"- Keep it under 120 characters.\n"
+        f"- Return ONLY the translated title, nothing else.\n\n"
+        f"Title to translate: {clean_title}"
+    )
+
+    def _call(mdl):
+        resp = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": model,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        f"Translate this video title to {target_language}.\n"
-                        f"Make it catchy and suitable for YouTube.\n"
-                        f"Keep it under 100 characters.\n"
-                        f"Return ONLY the translated title, nothing else.\n\n"
-                        f"Title: {original_title}"
-                    )
-                }],
-                "max_tokens": 100
+                "model": mdl,
+                "messages": [
+                    {"role": "system", "content": "You are a professional translator. Output only the translated text, no explanations."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 150,
+                "temperature": 0.3
             },
             timeout=30
         )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+    try:
+        result = _call(model)
+
+        # Validate: reject suspiciously short or emoji-only results
+        text_chars = _re.sub(r'[\s\U0001F000-\U0001FFFF!?.,#]', '', result)
+        if len(text_chars) < 5 or len(result) < 10:
+            logger.warning(f"Title translation too short ('{result}') — retrying with fallback model")
+            result = _call("qwen/qwen-2.5-72b-instruct")
+            text_chars = _re.sub(r'[\s\U0001F000-\U0001FFFF!?.,#]', '', result)
+            if len(text_chars) < 5:
+                logger.error(f"Title translation failed validation twice — using original")
+                return original_title
+
+        logger.info(f"Title translated: '{clean_title[:40]}...' → '{result}'")
+        return result
+
     except Exception as e:
         logger.error(f"Title translation failed: {e}")
         return original_title
