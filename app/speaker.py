@@ -43,7 +43,17 @@ def detect_speakers(video_path: str, segments: list, hf_token: str = "") -> tupl
             if os.path.exists(tmp_wav):
                 os.remove(tmp_wav)
 
-        diarization = pipeline(audio_input)
+        raw = pipeline(audio_input)
+
+        # pyannote ≥ 4.x returns a DiarizeOutput dataclass; extract the
+        # Annotation from .speaker_diarization.  Older versions return the
+        # Annotation directly (has .itertracks).
+        if hasattr(raw, "speaker_diarization"):
+            diarization = raw.speaker_diarization
+        elif hasattr(raw, "itertracks"):
+            diarization = raw
+        else:
+            raise ValueError(f"Unrecognised pyannote output type: {type(raw)}")
 
         for seg in segments:
             mid = (seg["start"] + seg["end"]) / 2
