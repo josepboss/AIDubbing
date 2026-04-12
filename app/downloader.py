@@ -45,7 +45,8 @@ def download_video(url: str, job_id: str, quality: str = "720p",
     """Download video using yt-dlp"""
     output_dir = f"app/uploads/{job_id}"
     os.makedirs(output_dir, exist_ok=True)
-    output_template = f"{output_dir}/%(title)s.%(ext)s"
+    # Use a safe fixed filename — title comes from get_video_info() separately
+    output_template = f"{output_dir}/video.%(ext)s"
 
     cmd = [
         "yt-dlp",
@@ -53,7 +54,7 @@ def download_video(url: str, job_id: str, quality: str = "720p",
         "--output", output_template,
         "--no-playlist",
         "--merge-output-format", "mp4",
-        "--write-info-json",
+        "--no-write-info-json",   # avoid filename issues with special chars in title
         "--newline",
         url
     ]
