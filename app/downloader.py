@@ -6,6 +6,8 @@ import re
 import tempfile
 import urllib.request
 import urllib.parse
+import http.cookiejar
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,10 @@ _DM_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/137.0.0.0 Safari/537.36"
 )
-_DM_METADATA_URL = "https://www.dailymotion.com/player/metadata/video/{video_id}"
+_DM_METADATA_URL = (
+    "https://www.dailymotion.com/player/metadata/video/{video_id}"
+    "?embedder=https%3A%2F%2Fwww.dailymotion.com&locale=en_US&dmV1st={visitor_id}"
+)
 _DM_OEMBED_URL = "https://www.dailymotion.com/services/oembed?url={url}&format=json"
 
 
@@ -41,31 +46,71 @@ def _extract_dm_video_id(url: str) -> str | None:
     return None
 
 
-def _dm_request(url: str) -> dict:
-    """HTTP GET with Dailymotion browser headers, returns parsed JSON."""
-    req = urllib.request.Request(
-        url,
+def _make_dm_opener() -> tuple[urllib.request.OpenerDirector, http.cookiejar.CookieJar]:
+    """Build a urllib opener that tracks cookies, mimicking a browser session."""
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener.addheaders = [
+        ("User-Agent", _DM_UA),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("Accept-Encoding", "identity"),
+        ("Connection", "keep-alive"),
+    ]
+    return opener, jar
+
+
+def _jar_to_cookie_str(jar: http.cookiejar.CookieJar) -> str:
+    """Convert CookieJar contents to a single 'name=val; ...' cookie header value."""
+    return "; ".join(f"{c.name}={c.value}" for c in jar)
+
+
+def _dm_get_m3u8(video_id: str) -> tuple[str, dict, str]:
+    """Return (m3u8_url, full_meta, cookie_str) for a Dailymotion video.
+
+    Two-step browser simulation:
+    1. Visit video page  → Dailymotion sets dmV1st + other session cookies
+    2. Fetch player metadata with those cookies → signed m3u8 URL
+    cookie_str must be forwarded to ffmpeg so Dailymotion's CDN accepts the stream.
+    """
+    opener, jar = _make_dm_opener()
+    visitor_id = str(uuid.uuid4())
+
+    # Step 1 – visit video page to pick up session cookies (dmV1st etc.)
+    page_url = f"https://www.dailymotion.com/video/{video_id}"
+    try:
+        req0 = urllib.request.Request(
+            page_url,
+            headers={"Referer": "https://www.dailymotion.com/"}
+        )
+        with opener.open(req0, timeout=15) as _:
+            pass
+        logger.info(f"DM page visit OK — cookies: {_jar_to_cookie_str(jar)[:120]}")
+    except Exception as e:
+        logger.warning(f"DM page visit failed (continuing): {e}")
+
+    # Step 2 – fetch player metadata with the session cookies
+    meta_url = _DM_METADATA_URL.format(video_id=video_id, visitor_id=visitor_id)
+    req1 = urllib.request.Request(
+        meta_url,
         headers={
-            "User-Agent": _DM_UA,
-            "Referer": "https://www.dailymotion.com/",
-            "Origin": "https://www.dailymotion.com",
+            "Referer": page_url,
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
+            "X-Requested-With": "XMLHttpRequest",
+        },
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode())
+    with opener.open(req1, timeout=20) as resp:
+        meta = json.loads(resp.read().decode())
 
+    cookie_str = _jar_to_cookie_str(jar)
+    logger.info(f"DM metadata OK — cookie_str len={len(cookie_str)}")
 
-def _dm_get_m3u8(video_id: str) -> tuple[str, dict]:
-    """Return (m3u8_url, full_meta) for a Dailymotion video."""
-    meta = _dm_request(_DM_METADATA_URL.format(video_id=video_id))
     qualities = meta.get("qualities", {})
 
     # Prefer the adaptive 'auto' HLS stream
     for stream in qualities.get("auto", []):
         if stream.get("type") == "application/x-mpegURL":
-            return stream["url"], meta
+            return stream["url"], meta, cookie_str
 
     # Fall back to the highest numbered quality
     numbered = sorted(
@@ -75,7 +120,7 @@ def _dm_get_m3u8(video_id: str) -> tuple[str, dict]:
     for q_key in numbered:
         for stream in qualities[q_key]:
             if stream.get("type") == "application/x-mpegURL":
-                return stream["url"], meta
+                return stream["url"], meta, cookie_str
 
     raise ValueError("No m3u8 stream found in Dailymotion player metadata")
 
@@ -104,17 +149,19 @@ def _dm_video_info(url: str) -> dict:
     if not video_id:
         return {"success": False, "error": "Could not extract Dailymotion video ID from URL"}
     try:
-        meta = _dm_request(_DM_METADATA_URL.format(video_id=video_id))
+        _m3u8_url, meta, _cookies = _dm_get_m3u8(video_id)
 
         # Try oEmbed for a proper thumbnail URL
-        thumbnail = ""
-        try:
-            oembed = _dm_request(
-                _DM_OEMBED_URL.format(url=urllib.parse.quote(url, safe=""))
-            )
-            thumbnail = oembed.get("thumbnail_url", "")
-        except Exception:
-            pass
+        thumbnail = meta.get("thumbnail_url", "")
+        if not thumbnail:
+            try:
+                opener, _jar = _make_dm_opener()
+                oembed_url = _DM_OEMBED_URL.format(url=urllib.parse.quote(url, safe=""))
+                with opener.open(urllib.request.Request(oembed_url), timeout=10) as r:
+                    oembed = json.loads(r.read().decode())
+                thumbnail = oembed.get("thumbnail_url", "")
+            except Exception:
+                pass
 
         owner = meta.get("owner") or {}
         uploader = owner.get("screenname", "") if isinstance(owner, dict) else str(owner)
@@ -141,7 +188,7 @@ def _dm_download(url: str, job_id: str, quality: str = "720p",
         return {"success": False, "error": "Could not extract Dailymotion video ID from URL"}
 
     try:
-        m3u8_url, meta = _dm_get_m3u8(video_id)
+        m3u8_url, meta, cookie_str = _dm_get_m3u8(video_id)
     except Exception as e:
         return {"success": False, "error": f"Failed to fetch Dailymotion stream: {e}"}
 
@@ -150,12 +197,20 @@ def _dm_download(url: str, job_id: str, quality: str = "720p",
     os.makedirs(output_dir, exist_ok=True)
     output_path = f"{output_dir}/video.mp4"
 
-    logger.info(f"Dailymotion: ffmpeg download — video_id={video_id}")
+    logger.info(f"Dailymotion: ffmpeg download — video_id={video_id}, cookies={bool(cookie_str)}")
+
+    # Build the headers string; include Cookie if we captured any session cookies
+    headers_str = (
+        f"User-Agent: {_DM_UA}\r\n"
+        f"Referer: https://www.dailymotion.com/video/{video_id}\r\n"
+        f"Origin: https://www.dailymotion.com\r\n"
+    )
+    if cookie_str:
+        headers_str += f"Cookie: {cookie_str}\r\n"
 
     cmd = [
         "ffmpeg", "-y",
-        "-headers",
-        f"User-Agent: {_DM_UA}\r\nReferer: https://www.dailymotion.com/\r\n",
+        "-headers", headers_str,
         "-i", m3u8_url,
         "-c", "copy",
         output_path,
