@@ -277,6 +277,56 @@
       transition: width 0.6s ease;
     }
 
+    #demucsBox {
+      display: none;
+      background: #13131f;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 10px 0 4px;
+    }
+    #demucsBox .d-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    #demucsBox .d-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #a78bfa;
+      letter-spacing: 0.3px;
+    }
+    #demucsBox .d-eta {
+      font-size: 11px;
+      color: #7b7b9a;
+    }
+    #demucsBox .d-bar-wrap {
+      background: #0a0a14;
+      border-radius: 6px;
+      height: 6px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    #demucsBox .d-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981, #34d399);
+      border-radius: 6px;
+      transition: width 1s ease;
+    }
+    #demucsBox .d-stats {
+      font-size: 11px;
+      color: #5a5a7a;
+    }
+
+    .step-timing {
+      font-size: 10px;
+      color: #4a4a6a;
+      margin-left: auto;
+      padding-left: 8px;
+      white-space: nowrap;
+    }
+
     .status-msg {
       font-size: 13px;
       color: #9090b0;
@@ -436,34 +486,53 @@
     </div>
     <div class="status-msg" id="statusMsg">Initializing...</div>
 
+    <!-- Demucs chunk progress (shown only during merge_video) -->
+    <div id="demucsBox">
+      <div class="d-header">
+        <span class="d-title">🎵 Vocal Separation (Demucs)</span>
+        <span class="d-eta" id="demucsEta">calculating...</span>
+      </div>
+      <div class="d-bar-wrap"><div class="d-bar" id="demucsBar" style="width:0%"></div></div>
+      <div class="d-stats" id="demucsStats"></div>
+    </div>
+
     <div class="steps">
       <div class="step" id="step-upload">
         <div class="step-icon">1</div> Upload Video
+        <span class="step-timing" id="timing-upload"></span>
       </div>
       <div class="step" id="step-extract_audio">
         <div class="step-icon">2</div> Extract Audio (FFmpeg)
+        <span class="step-timing" id="timing-extract_audio"></span>
       </div>
       <div class="step" id="step-transcribe">
         <div class="step-icon">3</div> Transcribe Speech (Whisper)
+        <span class="step-timing" id="timing-transcribe"></span>
       </div>
       <div class="step" id="step-detect_speakers">
         <div class="step-icon">4</div> Detect Speakers &amp; Gender
         <span id="speaker-method-badge" style="display:none;margin-left:10px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:0.5px;"></span>
+        <span class="step-timing" id="timing-detect_speakers"></span>
       </div>
       <div class="step" id="step-translate">
         <div class="step-icon">5</div> Translate to Arabic (OpenRouter)
+        <span class="step-timing" id="timing-translate"></span>
       </div>
       <div class="step" id="step-generate_tts">
         <div class="step-icon">6</div> Generate AI Voices (TTS)
+        <span class="step-timing" id="timing-generate_tts"></span>
       </div>
       <div class="step" id="step-assemble_audio">
         <div class="step-icon">7</div> Assemble Dubbed Audio
+        <span class="step-timing" id="timing-assemble_audio"></span>
       </div>
       <div class="step" id="step-merge_video">
-        <div class="step-icon">8</div> Merge with Video (FFmpeg)
+        <div class="step-icon">8</div> Merge with Video + Demucs
+        <span class="step-timing" id="timing-merge_video"></span>
       </div>
       <div class="step" id="step-metadata">
         <div class="step-icon">9</div> Title Translation &amp; Thumbnail
+        <span class="step-timing" id="timing-metadata"></span>
       </div>
     </div>
   </div>
@@ -695,8 +764,39 @@
     </div>
 
     <div id="dl-complete" style="display:none;margin-top:12px;padding:14px;background:rgba(16,185,129,0.08);border:1px solid #10b981;border-radius:10px;">
-      <div style="color:#6ee7b7;font-weight:600;margin-bottom:10px;">Download complete!</div>
-      <button class="btn btn-success" onclick="sendToDubbing()">🎙️ Send to Dubbing Pipeline</button>
+      <div style="color:#6ee7b7;font-weight:600;margin-bottom:10px;">✅ Download complete!</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <button class="btn btn-success" onclick="sendToDubbing()">🎙️ Send to Dubbing Pipeline</button>
+        <button class="btn btn-secondary" onclick="downloadSourceVideo()">⬇️ Save to My Computer</button>
+        <button class="btn btn-secondary" onclick="toggleSplitPanel()">✂️ Split into Clips</button>
+      </div>
+
+      <!-- Split panel -->
+      <div id="split-panel" style="display:none;margin-top:4px;background:#0f0f1a;border:1px solid #2a2a4a;border-radius:10px;padding:14px;">
+        <div style="font-size:13px;font-weight:600;color:#a78bfa;margin-bottom:10px;">✂️ Split into Equal Clips</div>
+        <div id="split-preview" style="font-size:13px;color:#9090b0;margin-bottom:12px;">Loading…</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <span style="font-size:13px;color:#c4c4e0;">Clips:</span>
+          <button class="btn btn-secondary" style="padding:3px 10px;font-size:16px;line-height:1;" onclick="changeClipCount(-1)">−</button>
+          <span id="split-n" style="font-size:18px;font-weight:700;color:#fff;min-width:28px;text-align:center;">—</span>
+          <button class="btn btn-secondary" style="padding:3px 10px;font-size:16px;line-height:1;" onclick="changeClipCount(+1)">+</button>
+          <span id="split-dur-label" style="font-size:12px;color:#7b7b9a;"></span>
+        </div>
+        <button class="btn btn-primary" id="split-go-btn" onclick="startSplit()" style="margin-bottom:10px;">✂️ Start Splitting</button>
+
+        <!-- Split progress -->
+        <div id="split-progress" style="display:none;">
+          <div class="progress-bar-wrap" style="margin:8px 0 6px;">
+            <div id="split-bar" class="progress-bar" style="background:linear-gradient(90deg,#f59e0b,#fbbf24);width:0%;transition:width 0.5s ease;"></div>
+          </div>
+          <div style="font-size:12px;color:#9090b0;" id="split-status-msg">Splitting…</div>
+        </div>
+
+        <!-- Clip download links -->
+        <div id="split-clips-list" style="display:none;margin-top:10px;"></div>
+
+        <div id="split-error" style="display:none;margin-top:8px;" class="alert alert-error"></div>
+      </div>
     </div>
 
     <div id="dl-error" style="display:none;margin-top:12px;" class="alert alert-error"></div>
@@ -863,6 +963,120 @@
       document.getElementById('dl-error').textContent = 'Error: ' + e.message;
       document.getElementById('dl-error').style.display = 'block';
     }
+  }
+
+  function downloadSourceVideo() {
+    if (!dlJobId) return;
+    window.open(`/api/download/file/${dlJobId}`, '_blank');
+  }
+
+  // ---- Split panel ----
+  let splitDurationSec = 0;
+  let splitN = 1;
+  let splitPollInterval = null;
+
+  function toggleSplitPanel() {
+    const panel = document.getElementById('split-panel');
+    if (panel.style.display === 'none') {
+      panel.style.display = 'block';
+      loadSplitInfo();
+    } else {
+      panel.style.display = 'none';
+    }
+  }
+
+  async function loadSplitInfo() {
+    if (!dlJobId) return;
+    document.getElementById('split-preview').textContent = 'Analysing video…';
+    try {
+      const res = await fetch(`/api/download/split-info/${dlJobId}`);
+      const data = await res.json();
+      splitDurationSec = data.duration_sec;
+      splitN = data.suggested_clips;
+      updateSplitPreview();
+    } catch (e) {
+      document.getElementById('split-preview').textContent = 'Could not read video duration.';
+    }
+  }
+
+  function updateSplitPreview() {
+    const durMin = splitDurationSec / 60;
+    const clipMin = (durMin / splitN).toFixed(1);
+    document.getElementById('split-n').textContent = splitN;
+    document.getElementById('split-dur-label').textContent = `≈ ${clipMin} min each`;
+    document.getElementById('split-preview').textContent =
+      `Video: ${Math.floor(durMin)}m ${Math.round((durMin % 1) * 60)}s  →  ${splitN} clip${splitN > 1 ? 's' : ''} of ≈ ${clipMin} min each`;
+  }
+
+  function changeClipCount(delta) {
+    const newN = splitN + delta;
+    if (newN < 1) return;
+    const clipMin = (splitDurationSec / 60) / newN;
+    if (clipMin > 120) return;  // sanity cap
+    splitN = newN;
+    updateSplitPreview();
+  }
+
+  async function startSplit() {
+    if (!dlJobId || splitN < 1) return;
+    document.getElementById('split-go-btn').disabled = true;
+    document.getElementById('split-progress').style.display = 'block';
+    document.getElementById('split-clips-list').style.display = 'none';
+    document.getElementById('split-error').style.display = 'none';
+    document.getElementById('split-status-msg').textContent = 'Splitting with FFmpeg (stream copy, no re-encoding)…';
+    document.getElementById('split-bar').style.width = '15%';
+
+    try {
+      const res = await fetch(`/api/download/split/${dlJobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ n_clips: splitN }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to start split');
+      splitPollInterval = setInterval(pollSplitStatus, 3000);
+    } catch (e) {
+      document.getElementById('split-error').textContent = 'Error: ' + e.message;
+      document.getElementById('split-error').style.display = 'block';
+      document.getElementById('split-go-btn').disabled = false;
+    }
+  }
+
+  async function pollSplitStatus() {
+    if (!dlJobId) return;
+    try {
+      const res = await fetch(`/api/download/split-status/${dlJobId}`);
+      const data = await res.json();
+      if (data.split_status === 'done') {
+        clearInterval(splitPollInterval);
+        document.getElementById('split-bar').style.width = '100%';
+        document.getElementById('split-status-msg').textContent = `Done — ${data.split_clips.length} clips ready`;
+        renderClipLinks(data.split_clips);
+        document.getElementById('split-go-btn').disabled = false;
+      } else if (data.split_status === 'failed') {
+        clearInterval(splitPollInterval);
+        document.getElementById('split-progress').style.display = 'none';
+        document.getElementById('split-error').textContent = 'Split failed: ' + (data.split_error || 'unknown error');
+        document.getElementById('split-error').style.display = 'block';
+        document.getElementById('split-go-btn').disabled = false;
+      } else {
+        // Animate bar while splitting
+        const bar = document.getElementById('split-bar');
+        const cur = parseFloat(bar.style.width) || 15;
+        if (cur < 85) bar.style.width = (cur + 5) + '%';
+      }
+    } catch (e) { /* ignore poll errors */ }
+  }
+
+  function renderClipLinks(clips) {
+    const list = document.getElementById('split-clips-list');
+    list.style.display = 'block';
+    list.innerHTML = `<div style="font-size:12px;font-weight:600;color:#a78bfa;margin-bottom:8px;">${clips.length} clips ready:</div>` +
+      clips.map((c, i) =>
+        `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1a1a2e;">
+          <span style="font-size:13px;color:#c4c4e0;">Clip ${i + 1} <span style="color:#5a5a7a;">(${c.size_mb} MB)</span></span>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;" onclick="window.open('/api/download/split-file/${dlJobId}/${i}','_blank')">⬇️ Download</button>
+        </div>`
+      ).join('');
   }
 
   document.getElementById('dl-url').addEventListener('keydown', e => {
@@ -1042,6 +1256,13 @@
     alternating:    { label: 'Alternating',      bg: '#f59e0b', color: '#1a1a2e' },
   };
 
+  function fmtDur(sec) {
+    if (!sec) return '';
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+
   function updateUI(job) {
     document.getElementById('statusMsg').textContent = job.message || '';
     const stepIdx = job.step_index || 0;
@@ -1054,6 +1275,36 @@
       if (i < stepIdx) el.classList.add('done');
       else if (job.current_step === s) el.classList.add('active');
     });
+
+    // Step timing badges
+    const timings = job.step_timings || {};
+    Object.entries(timings).forEach(([step, t]) => {
+      const el = document.getElementById('timing-' + step);
+      if (!el) return;
+      if (t.done && t.elapsed) {
+        el.textContent = fmtDur(t.elapsed);
+        el.style.color = '#4a8a6a';
+      } else if (!t.done && t.start) {
+        const running = Math.round(Date.now() / 1000 - t.start);
+        el.textContent = fmtDur(running) + '…';
+        el.style.color = '#6a6a9a';
+      }
+    });
+
+    // Demucs chunk progress box
+    const dp = job.demucs_progress;
+    const demucsBox = document.getElementById('demucsBox');
+    if (dp && job.current_step === 'merge_video' && dp.total > 0) {
+      demucsBox.style.display = 'block';
+      const pct = Math.round((dp.chunk / dp.total) * 100);
+      document.getElementById('demucsBar').style.width = pct + '%';
+      const etaTxt = dp.eta_min > 0 ? `~${Math.round(dp.eta_min)} min remaining` : 'finishing...';
+      document.getElementById('demucsEta').textContent = etaTxt;
+      document.getElementById('demucsStats').textContent =
+        `Chunk ${dp.chunk} / ${dp.total}  ·  ${dp.avg_sec_per_chunk}s per chunk  ·  ${dp.cpu_count} CPUs`;
+    } else {
+      demucsBox.style.display = 'none';
+    }
 
     // Speaker method badge
     const badge = document.getElementById('speaker-method-badge');

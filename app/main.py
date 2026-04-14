@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 import subprocess
+import time
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
@@ -131,6 +133,19 @@ def run_pipeline(job_id: str, resume_from: str = None):
 
         resume_idx = RESUMABLE_STEPS.index(resume_from) if resume_from in RESUMABLE_STEPS else 0
 
+        # Step timing tracker — records actual elapsed seconds per step
+        step_timings = job.get("step_timings", {})
+
+        def start_step(name):
+            step_timings[name] = {"start": time.time(), "done": False}
+            update_job(job_id, step_timings=step_timings)
+
+        def finish_step(name):
+            if name in step_timings:
+                step_timings[name]["elapsed"] = round(time.time() - step_timings[name]["start"])
+                step_timings[name]["done"] = True
+            update_job(job_id, step_timings=step_timings)
+
         # Load segments from the most recent checkpoint when resuming
         segments = None
         if resume_idx >= 4:
@@ -144,23 +159,28 @@ def run_pipeline(job_id: str, resume_from: str = None):
 
         # ── Step 1: Extract audio ──────────────────────────────────────────────
         if resume_idx <= 0:
+            start_step("extract_audio")
             update_job(job_id, current_step="extract_audio", step_index=1,
                        message="Extracting audio from video...")
             subprocess.run([
                 "ffmpeg", "-y", "-i", video_path,
                 "-ac", "1", "-ar", "16000", audio_path
             ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            finish_step("extract_audio")
 
         # ── Step 2: Transcribe ─────────────────────────────────────────────────
         if resume_idx <= 1:
+            start_step("transcribe")
             update_job(job_id, current_step="transcribe", step_index=2,
                        message="Transcribing speech with Whisper...")
             from app.transcribe import transcribe_video
             segments = transcribe_video(video_path, settings.get("whisper_model", "base"))
             _save_ckpt(job_id, "transcribed", segments)
+            finish_step("transcribe")
 
         # ── Step 3: Speaker detection ──────────────────────────────────────────
         if resume_idx <= 2:
+            start_step("detect_speakers")
             update_job(job_id, current_step="detect_speakers", step_index=3,
                        message="Detecting speakers and gender...")
             from app.speaker import detect_speakers
@@ -170,9 +190,11 @@ def run_pipeline(job_id: str, resume_from: str = None):
             _save_ckpt(job_id, "speakers", segments)
             update_job(job_id, speaker_method=speaker_method,
                        message=f"Speakers detected via {speaker_method}")
+            finish_step("detect_speakers")
 
         # ── Step 4: Translate ──────────────────────────────────────────────────
         if resume_idx <= 3:
+            start_step("translate")
             update_job(job_id, current_step="translate", step_index=4,
                        message=f"Translating to {settings.get('target_language', 'Arabic')}...")
             if not settings.get("openrouter_api_key"):
@@ -195,9 +217,11 @@ def run_pipeline(job_id: str, resume_from: str = None):
                 f.write(generate_srt(segments))
             update_job(job_id, srt_path=srt_path)
             logger.info(f"SRT saved: {srt_path}")
+            finish_step("translate")
 
         # ── Step 5: Generate TTS ───────────────────────────────────────────────
         if resume_idx <= 4:
+            start_step("generate_tts")
             update_job(job_id, current_step="generate_tts", step_index=5,
                        message="Generating dubbed audio with AI voices...")
             # Merge per-job voice overrides into settings (highest priority)
@@ -207,24 +231,57 @@ def run_pipeline(job_id: str, resume_from: str = None):
             from app.dub import create_dubbed_audio, get_video_duration
             duration = get_video_duration(video_path)
             create_dubbed_audio(segments, settings, dubbed_audio_path, duration)
+            finish_step("generate_tts")
 
         # ── Step 6: Assemble audio ─────────────────────────────────────────────
         if resume_idx <= 5:
+            start_step("assemble_audio")
             update_job(job_id, current_step="assemble_audio", step_index=6,
                        message="Assembling dubbed audio track...")
+            finish_step("assemble_audio")
 
         # ── Step 7: Merge video ────────────────────────────────────────────────
+        start_step("merge_video")
+        cpu_count = os.cpu_count() or 1
         update_job(job_id, current_step="merge_video", step_index=7,
-                   message="Merging dubbed audio with video...")
+                   message=f"Starting demucs vocal separation on {cpu_count} CPUs...",
+                   cpu_count=cpu_count)
         from app.dub import merge_video_with_dubbed_audio
+
+        # Progress callback — updates job JSON on every chunk so the UI can show live progress
+        def demucs_progress(chunk_num, total_chunks, remaining, avg_sec, eta_min, cpus):
+            update_job(job_id,
+                       message=f"Demucs vocal separation: chunk {chunk_num}/{total_chunks} "
+                               f"({remaining} remaining, ~{eta_min:.0f} min ETA)",
+                       demucs_progress={
+                           "chunk": chunk_num,
+                           "total": total_chunks,
+                           "remaining": remaining,
+                           "eta_min": round(eta_min, 1),
+                           "avg_sec_per_chunk": round(avg_sec, 1),
+                           "cpu_count": cpus,
+                       })
+
         output_filename = f"{job_id}_dubbed.mp4"
         output_path = str(OUTPUT_DIR / output_filename)
-        # Re-read job to get srt_path written during the translate step
         current_srt_path = read_job(job_id).get("srt_path")
         logger.info(f"Merge: srt_path={current_srt_path}")
         merge_video_with_dubbed_audio(video_path, dubbed_audio_path, output_path,
                                       job_id=job_id, settings=settings,
-                                      srt_path=current_srt_path)
+                                      srt_path=current_srt_path,
+                                      progress_fn=demucs_progress)
+        finish_step("merge_video")
+
+        # Warn in job status if demucs failed (no_vocals.wav missing or tiny)
+        no_vocals_wav = AUDIO_DIR / job_id / "no_vocals.wav"
+        use_demucs = settings.get("vocal_removal", "demucs") == "demucs"
+        if use_demucs:
+            if not no_vocals_wav.exists() or no_vocals_wav.stat().st_size < 1_000_000:
+                logger.warning("Demucs produced no output — video merged with original audio at 15% volume")
+                update_job(job_id,
+                           message="⚠️ Demucs vocal removal failed (see server logs for reason). "
+                                   "Video merged using original audio at 15% volume instead. "
+                                   "Continuing to subtitle burn...")
 
         # ── Step 8: Translate title + embed metadata + generate thumbnail ────────
         update_job(job_id, current_step="metadata", step_index=8,
@@ -478,6 +535,158 @@ async def dub_from_download(download_job_id: str):
     write_job(dub_job_id, job_data)
     logger.info(f"Created dub job {dub_job_id} from download {download_job_id}")
     return {"job_id": dub_job_id}
+
+
+def _get_video_duration(video_path: str) -> float:
+    """Return video duration in seconds via ffprobe."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
+        capture_output=True, text=True, timeout=30,
+    )
+    info = json.loads(result.stdout)
+    return float(info["format"]["duration"])
+
+
+def _calc_clip_count(duration_sec: float) -> int:
+    """Return the optimal number of clips so each is between 10–15 min."""
+    duration_min = duration_sec / 60
+    if duration_min <= 15:
+        return 1
+    n = math.ceil(duration_min / 15)   # min clips to keep each ≤ 15 min
+    clip_min = duration_min / n
+    # If clips are suspiciously short, reduce n (shouldn't happen but be safe)
+    while n > 1 and clip_min < 10:
+        n -= 1
+        clip_min = duration_min / n
+    return n
+
+
+def _run_split(dl_job_id: str, video_path: str, n_clips: int):
+    dl_job = load_dl_job(dl_job_id) or {}
+    dl_job["split_status"] = "splitting"
+    dl_job["split_clips"] = []
+    save_dl_job(dl_job_id, dl_job)
+
+    clips_dir = Path(video_path).parent / "clips"
+    clips_dir.mkdir(exist_ok=True)
+
+    try:
+        duration_sec = _get_video_duration(video_path)
+        segment_sec = math.ceil(duration_sec / n_clips)
+
+        clip_pattern = str(clips_dir / "clip_%03d.mp4")
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-c", "copy", "-map", "0",
+            "-segment_time", str(segment_sec),
+            "-f", "segment",
+            "-reset_timestamps", "1",
+            clip_pattern,
+        ]
+        logger.info(f"Split: {n_clips} clips × ~{segment_sec}s  →  {clips_dir}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+        clip_files = sorted(clips_dir.glob("clip_*.mp4"))
+        dl_job = load_dl_job(dl_job_id) or {}
+        if result.returncode == 0 and clip_files:
+            dl_job["split_status"] = "done"
+            dl_job["split_clips"] = [
+                {
+                    "index": i,
+                    "filename": f.name,
+                    "size_mb": round(f.stat().st_size / 1024 / 1024, 1),
+                }
+                for i, f in enumerate(clip_files)
+            ]
+            logger.info(f"Split done: {len(clip_files)} clips")
+        else:
+            dl_job["split_status"] = "failed"
+            dl_job["split_error"] = result.stderr[-400:] if result.stderr else "Unknown error"
+            logger.error(f"Split failed: {dl_job['split_error']}")
+    except Exception as e:
+        dl_job = load_dl_job(dl_job_id) or {}
+        dl_job["split_status"] = "failed"
+        dl_job["split_error"] = str(e)
+        logger.error(f"Split exception: {e}")
+
+    save_dl_job(dl_job_id, dl_job)
+
+
+@app.get("/api/download/split-info/{dl_job_id}")
+async def split_info(dl_job_id: str):
+    """Return suggested clip count and per-clip duration."""
+    dl_job = load_dl_job(dl_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    video_path = dl_job.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    try:
+        duration_sec = _get_video_duration(video_path)
+        n = _calc_clip_count(duration_sec)
+        return {
+            "duration_sec": round(duration_sec),
+            "duration_min": round(duration_sec / 60, 1),
+            "suggested_clips": n,
+            "clip_duration_min": round(duration_sec / 60 / n, 1),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/download/split/{dl_job_id}")
+async def start_split(dl_job_id: str, body: dict, background_tasks: BackgroundTasks):
+    dl_job = load_dl_job(dl_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    video_path = dl_job.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    n_clips = int(body.get("n_clips", 1))
+    if n_clips < 1:
+        n_clips = 1
+    background_tasks.add_task(_run_split, dl_job_id, video_path, n_clips)
+    return {"success": True}
+
+
+@app.get("/api/download/split-status/{dl_job_id}")
+async def get_split_status(dl_job_id: str):
+    dl_job = load_dl_job(dl_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "split_status": dl_job.get("split_status"),
+        "split_clips": dl_job.get("split_clips", []),
+        "split_error": dl_job.get("split_error"),
+    }
+
+
+@app.get("/api/download/split-file/{dl_job_id}/{clip_index}")
+async def download_split_file(dl_job_id: str, clip_index: int):
+    dl_job = load_dl_job(dl_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    clips = dl_job.get("split_clips", [])
+    if clip_index < 0 or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip index out of range")
+    video_path = dl_job.get("video_path")
+    clip_file = Path(video_path).parent / "clips" / clips[clip_index]["filename"]
+    if not clip_file.exists():
+        raise HTTPException(status_code=404, detail="Clip file not found on disk")
+    return FileResponse(str(clip_file), media_type="video/mp4", filename=clips[clip_index]["filename"])
+
+
+@app.get("/api/download/file/{dl_job_id}")
+async def download_source_file(dl_job_id: str):
+    """Download the raw video file that was fetched by yt-dlp."""
+    dl_job = load_dl_job(dl_job_id)
+    if not dl_job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    video_path = dl_job.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Video file not found on server")
+    filename = Path(video_path).name
+    return FileResponse(video_path, media_type="video/mp4", filename=filename)
 
 
 @app.get("/api/download-srt/{job_id}")
