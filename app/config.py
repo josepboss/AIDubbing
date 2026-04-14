@@ -18,7 +18,8 @@ DEFAULT_SETTINGS = {
     "elevenlabs_female_voice_id": "",
     "target_language": "Arabic",
     "whisper_model": "base",
-    "hf_token": ""
+    "hf_token": "",
+    "bilibili_cookies": ""
 }
 
 

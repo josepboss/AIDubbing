@@ -717,6 +717,24 @@
     </div>
   </div>
 
+  <div class="card">
+    <h3>🍪 Bilibili Cookies</h3>
+    <p style="font-size:13px;color:#7b7b9a;margin-bottom:12px;">
+      Bilibili requires login cookies to download videos (HTTP 412 error fix).<br>
+      <strong style="color:#c4c4e0;">How to get your cookies:</strong><br>
+      1. Install <em>Get cookies.txt LOCALLY</em> extension in Chrome/Firefox<br>
+      2. Log in to <a href="https://www.bilibili.com" target="_blank" style="color:#a78bfa;">bilibili.com</a><br>
+      3. Click the extension → Export → copy the full content<br>
+      4. Paste it below and save
+    </p>
+    <div class="form-group">
+      <label>Cookies (Netscape format from cookies.txt)</label>
+      <textarea id="s-bilibili_cookies" rows="6"
+        style="width:100%;background:#0f0f1a;border:1px solid #2a2a4a;border-radius:8px;color:#c4c4e0;padding:10px;font-family:monospace;font-size:11px;resize:vertical;"
+        placeholder="# Netscape HTTP Cookie File&#10;.bilibili.com      TRUE    /       FALSE   ..."></textarea>
+    </div>
+  </div>
+
   <div class="action-row">
     <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
   </div>
@@ -1111,6 +1129,7 @@
       document.getElementById('s-whisper_model').value = s.whisper_model || 'base';
       document.getElementById('s-hf_token').value = s.hf_token || '';
       document.getElementById('s-thumbnail_style').value = s.thumbnail_style || 'title_overlay';
+      document.getElementById('s-bilibili_cookies').value = s.bilibili_cookies || '';
       updateTTSVisibility();
     } catch (e) {
       console.error('Failed to load settings', e);
@@ -1136,6 +1155,7 @@
       whisper_model: document.getElementById('s-whisper_model').value,
       hf_token: document.getElementById('s-hf_token').value,
       thumbnail_style: document.getElementById('s-thumbnail_style').value,
+      bilibili_cookies: document.getElementById('s-bilibili_cookies').value,
     };
     try {
       await fetch('/api/settings', {
