@@ -200,10 +200,31 @@ def _dm_download(url: str, job_id: str, quality: str = "720p",
 
 # ── yt-dlp implementation (all other sites) ────────────────────────────────────
 
+_BILI_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+def _is_bilibili(url: str) -> bool:
+    return "bilibili.com" in url or "b23.tv" in url
+
+def _bilibili_extra_args() -> list[str]:
+    """Return extra yt-dlp flags needed to bypass Bilibili's 412 check."""
+    return [
+        "--user-agent", _BILI_UA,
+        "--add-headers", "Referer:https://www.bilibili.com",
+        "--add-headers", "Origin:https://www.bilibili.com",
+        "--sleep-interval", "2",
+        "--extractor-args", "bilibili:dm_url=",
+    ]
+
+
 def _ytdlp_video_info(url: str) -> dict:
+    extra = _bilibili_extra_args() if _is_bilibili(url) else []
     try:
         result = subprocess.run(
-            ["yt-dlp", "--dump-json", "--no-download", url],
+            ["yt-dlp", "--dump-json", "--no-download", *extra, url],
             capture_output=True,
             text=True,
             timeout=30,
@@ -232,6 +253,8 @@ def _ytdlp_download(url: str, job_id: str, quality: str = "720p",
     os.makedirs(output_dir, exist_ok=True)
     output_template = f"{output_dir}/video.%(ext)s"
 
+    extra = _bilibili_extra_args() if _is_bilibili(url) else []
+
     cmd = [
         "yt-dlp",
         "--format", _get_format(quality),
@@ -240,6 +263,7 @@ def _ytdlp_download(url: str, job_id: str, quality: str = "720p",
         "--merge-output-format", "mp4",
         "--no-write-info-json",
         "--newline",
+        *extra,
         url,
     ]
 
